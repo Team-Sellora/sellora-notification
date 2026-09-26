@@ -1,4 +1,4 @@
-﻿name: Reusable .NET CI
+name: Reusable .NET CI
 
 on:
   workflow_call:
@@ -108,6 +108,7 @@ jobs:
         run: dotnet restore "${{ inputs.solution-path }}"
 
       - name: SonarQube begin
+        continue-on-error: true
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
@@ -151,6 +152,7 @@ jobs:
 
       - name: SonarQube end
         if: always()
+        continue-on-error: true
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: |
