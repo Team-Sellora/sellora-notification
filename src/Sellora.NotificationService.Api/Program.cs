@@ -1,0 +1,149 @@
+using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.IdentityModel.Tokens;
+using Sellora.NotificationService.Api.Authorization;
+using Sellora.NotificationService.Api.Tenancy;
+using Sellora.NotificationService.Application.Notifications;
+using Sellora.NotificationService.Domain.Tenancy;
+using Sellora.NotificationService.Infrastructure.Kafka;
+using Sellora.NotificationService.Infrastructure.Notifications;
+using Sellora.NotificationService.Infrastructure.Persistence;
+using Serilog;
+
+var builder = WebApplication.CreateBuilder(args);
+
+builder.Host.UseSerilog((context, configuration) => configuration
+    .ReadFrom.Configuration(context.Configuration)
+    .Enrich.FromLogContext()
+    .WriteTo.Console());
+
+// Same JWT setup as every Sellora service (WSO2 IS).
+var jwt = builder.Configuration.GetSection("Jwt");
+var audiences = jwt.GetSection("Audience").Get<string[]>()
+    ?? new[] { jwt["Audience"]! };
+
+builder.Services
+    .AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
+    .AddJwtBearer(options =>
+    {
+        options.Authority = jwt["Authority"];
+        options.MetadataAddress = jwt["MetadataAddress"]!;
+        options.MapInboundClaims = false;
+
+        options.TokenValidationParameters = new TokenValidationParameters
+        {
+            ValidateIssuer = true,
+            ValidIssuer = jwt["Issuer"],
+            ValidateAudience = true,
+            ValidAudiences = audiences,
+            ValidateLifetime = true,
+            ValidateIssuerSigningKey = true,
+            ClockSkew = TimeSpan.FromSeconds(30),
+            RoleClaimType = "roles"
+        };
+
+        // Local and staging hosts may not trust the shared WSO2 CA.
+        if (builder.Environment.IsDevelopment() || builder.Environment.IsStaging())
+        {
+            options.BackchannelHttpHandler = new HttpClientHandler
+            {
+                ServerCertificateCustomValidationCallback =
+                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
+            };
+        }
+    });
+
+builder.Services.AddAuthorization(options => options.AddSelloraRolePolicies());
+
+builder.Services.AddHttpContextAccessor();
+builder.Services.AddScoped<HttpTenantContext>();
+builder.Services.AddScoped<ITenantContext>(sp => sp.GetRequiredService<HttpTenantContext>());
+builder.Services.AddScoped<ISystemTenantContext>(sp => sp.GetRequiredService<HttpTenantContext>());
+builder.Services.AddSingleton(TimeProvider.System);
+
+var connectionString = builder.Configuration.GetConnectionString("Default");
+
+if (string.IsNullOrWhiteSpace(connectionString))
+{
+    throw new InvalidOperationException("The notification database connection string is not configured.");
+}
+
+builder.Services.AddDbContext<NotificationDbContext>(options => options.UseNpgsql(connectionString));
+
+// US-E5-1: consume order events into Pending notification requests.
+builder.Services.Configure<OrderEventConsumerOptions>(builder.Configuration.GetSection(OrderEventConsumerOptions.SectionName));
+builder.Services.AddScoped<INotificationIntake, NotificationIntakeService>();
+builder.Services.AddScoped<INotificationRequestReader, NotificationRequestReader>();
+
+if (!builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services.AddHostedService<OrderEventConsumerService>();
+}
+
+builder.Services.AddProblemDetails();
+builder.Services.AddHealthChecks();
+builder.Services.AddControllers();
+
+builder.Services.Configure<ForwardedHeadersOptions>(options =>
+{
+    options.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+    // Azure terminates TLS before forwarding requests to this container.
+    options.KnownNetworks.Clear();
+    options.KnownProxies.Clear();
+});
+
+var allowedOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? Array.Empty<string>();
+
+builder.Services.AddCors(options =>
+{
+    options.AddDefaultPolicy(policy =>
+    {
+        if (allowedOrigins.Length > 0)
+        {
+            policy.WithOrigins(allowedOrigins);
+        }
+
+        policy.AllowAnyHeader().AllowAnyMethod();
+    });
+});
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+var app = builder.Build();
+
+app.UseExceptionHandler();
+app.UseSerilogRequestLogging();
+app.UseForwardedHeaders();
+
+// Migrate before the consumer can write (hosted services start after this line runs).
+if (!app.Environment.IsEnvironment("Testing"))
+{
+    await using var scope = app.Services.CreateAsyncScope();
+    var db = scope.ServiceProvider.GetRequiredService<NotificationDbContext>();
+    await db.Database.MigrateAsync();
+}
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
+// Containers receive internal HTTP; HTTPS is terminated by APIM / Azure.
+if (!app.Environment.IsEnvironment("Container"))
+{
+    app.UseHttpsRedirection();
+}
+
+app.UseCors();
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
+app.MapHealthChecks("/health");
+
+app.Run();
+
+public partial class Program;

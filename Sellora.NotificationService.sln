@@ -1,0 +1,57 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{095CB11F-87B4-413F-9013-FC2AC4778C24}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sellora.NotificationService.Api", "src\Sellora.NotificationService.Api\Sellora.NotificationService.Api.csproj", "{6D133B2B-5DEC-430B-92A3-AF4312405853}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sellora.NotificationService.Application", "src\Sellora.NotificationService.Application\Sellora.NotificationService.Application.csproj", "{E809C739-E313-48B5-9ED5-A14CFCF5EE57}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sellora.NotificationService.Domain", "src\Sellora.NotificationService.Domain\Sellora.NotificationService.Domain.csproj", "{4A586154-DFB0-423C-BC92-2296EA5C3DCA}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sellora.NotificationService.Infrastructure", "src\Sellora.NotificationService.Infrastructure\Sellora.NotificationService.Infrastructure.csproj", "{8EBE3942-0141-41BD-B428-15CC807C2097}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0AEC0D2F-0B72-4CD1-89E8-44D2D405FD66}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Sellora.NotificationService.Tests", "tests\Sellora.NotificationService.Tests\Sellora.NotificationService.Tests.csproj", "{E178C628-8F7A-47E5-9F62-7D9246D0ED1A}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{6D133B2B-5DEC-430B-92A3-AF4312405853}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6D133B2B-5DEC-430B-92A3-AF4312405853}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6D133B2B-5DEC-430B-92A3-AF4312405853}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6D133B2B-5DEC-430B-92A3-AF4312405853}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E809C739-E313-48B5-9ED5-A14CFCF5EE57}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E809C739-E313-48B5-9ED5-A14CFCF5EE57}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E809C739-E313-48B5-9ED5-A14CFCF5EE57}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E809C739-E313-48B5-9ED5-A14CFCF5EE57}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4A586154-DFB0-423C-BC92-2296EA5C3DCA}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4A586154-DFB0-423C-BC92-2296EA5C3DCA}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4A586154-DFB0-423C-BC92-2296EA5C3DCA}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4A586154-DFB0-423C-BC92-2296EA5C3DCA}.Release|Any CPU.Build.0 = Release|Any CPU
+		{8EBE3942-0141-41BD-B428-15CC807C2097}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{8EBE3942-0141-41BD-B428-15CC807C2097}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{8EBE3942-0141-41BD-B428-15CC807C2097}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{8EBE3942-0141-41BD-B428-15CC807C2097}.Release|Any CPU.Build.0 = Release|Any CPU
+		{E178C628-8F7A-47E5-9F62-7D9246D0ED1A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{E178C628-8F7A-47E5-9F62-7D9246D0ED1A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{E178C628-8F7A-47E5-9F62-7D9246D0ED1A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{E178C628-8F7A-47E5-9F62-7D9246D0ED1A}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{6D133B2B-5DEC-430B-92A3-AF4312405853} = {095CB11F-87B4-413F-9013-FC2AC4778C24}
+		{E809C739-E313-48B5-9ED5-A14CFCF5EE57} = {095CB11F-87B4-413F-9013-FC2AC4778C24}
+		{4A586154-DFB0-423C-BC92-2296EA5C3DCA} = {095CB11F-87B4-413F-9013-FC2AC4778C24}
+		{8EBE3942-0141-41BD-B428-15CC807C2097} = {095CB11F-87B4-413F-9013-FC2AC4778C24}
+		{E178C628-8F7A-47E5-9F62-7D9246D0ED1A} = {0AEC0D2F-0B72-4CD1-89E8-44D2D405FD66}
+	EndGlobalSection
+EndGlobal
