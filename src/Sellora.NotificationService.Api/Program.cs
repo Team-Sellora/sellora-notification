@@ -154,6 +154,10 @@ app.UseAuthorization();
 app.MapControllers();
 app.MapHealthChecks("/health");
 
+app.MapGet("/whoami", (HttpContext context) =>
+    Results.Ok(context.User.Claims.Select(claim => new { claim.Type, claim.Value })))
+    .RequireAuthorization();
+    
 app.Run();
 
 public partial class Program;
