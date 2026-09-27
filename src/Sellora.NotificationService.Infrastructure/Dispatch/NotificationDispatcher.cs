@@ -28,8 +28,12 @@ public sealed class NotificationDispatcher(
     IEmailSender sender,
     TimeProvider clock,
     IOptions<DispatchOptions> options,
-    ILogger<NotificationDispatcher> logger) : INotificationDispatcher
+    ILogger<NotificationDispatcher> logger,
+    Func<double>? random = null) : INotificationDispatcher
 {
+    /// <summary>Jitter source; tests pass a fixed value to make delays exact.</summary>
+    private readonly Func<double> _random = random ?? Random.Shared.NextDouble;
+
     public const string NotificationIdHeader = "X-Sellora-Notification-Id";
     public const string OrderReferenceHeader = "X-Sellora-Order-Reference";
     public const string BodyHashHeader = "X-Sellora-Body-SHA256";
@@ -41,10 +45,38 @@ public sealed class NotificationDispatcher(
 
         foreach (var notificationRequestId in claimed)
         {
-            await DispatchOneAsync(notificationRequestId, settings, cancellationToken);
+            await DispatchOneAsync(notificationRequestId, settings, AttemptTrigger.Automatic, null, cancellationToken);
         }
 
         return claimed.Count;
+    }
+
+    public async Task<bool> DispatchNowAsync(
+        Guid notificationRequestId,
+        AttemptTrigger trigger,
+        string? triggeredBy,
+        CancellationToken cancellationToken)
+    {
+        var settings = options.Value;
+        var now = clock.GetUtcNow();
+
+        // Claim this one row, unless another dispatcher is sending it right now.
+        var claimed = await db.Database.ExecuteSqlInterpolatedAsync(
+            $"""
+            UPDATE notification_request
+            SET claimed_until = {now.AddSeconds(settings.LeaseSeconds)}
+            WHERE notification_request_id = {notificationRequestId}
+              AND (claimed_until IS NULL OR claimed_until < {now})
+            """,
+            cancellationToken);
+
+        if (claimed != 1)
+        {
+            return false;
+        }
+
+        await DispatchOneAsync(notificationRequestId, settings, trigger, triggeredBy, cancellationToken);
+        return true;
     }
 
     /// <summary>
@@ -72,7 +104,7 @@ public sealed class NotificationDispatcher(
                 WHERE notification_request_id IN (
                     SELECT notification_request_id
                     FROM notification_request
-                    WHERE status IN ('Pending', 'PartiallySent')
+                    WHERE status IN ('Pending', 'PartiallySent', 'Failed')
                       AND (attempt_count = 0 OR next_attempt_at <= @now)
                       AND (claimed_until IS NULL OR claimed_until < @now)
                     ORDER BY received_at
@@ -103,13 +135,21 @@ public sealed class NotificationDispatcher(
         }
     }
 
-    private async Task DispatchOneAsync(Guid notificationRequestId, DispatchOptions settings, CancellationToken cancellationToken)
+    private async Task DispatchOneAsync(
+        Guid notificationRequestId,
+        DispatchOptions settings,
+        AttemptTrigger trigger,
+        string? triggeredBy,
+        CancellationToken cancellationToken)
     {
+        var policy = settings.Policy(_random);
+
         db.ChangeTracker.Clear();
 
         var request = await db.NotificationRequests
             .IgnoreQueryFilters() // background work across tenants; each row carries its own companyId
             .Include(candidate => candidate.Recipients)
+            .Include(candidate => candidate.AttemptHistory)
             .SingleOrDefaultAsync(candidate => candidate.NotificationRequestId == notificationRequestId, cancellationToken);
 
         if (request is null || request.Status == NotificationStatus.Sent)
@@ -129,19 +169,21 @@ public sealed class NotificationDispatcher(
             }
             catch (NotificationRenderException exception)
             {
-                // Retrying cannot fix the stored event; US-E5-3 turns this into Failed.
                 logger.LogError(
                     "NotificationRenderFailed {NotificationRequestId} ({OrderReference}): {Reason}",
                     request.NotificationRequestId, request.OrderReference, exception.Message);
 
+                // Retrying cannot fix the stored event: permanent, visible to the admin.
                 request.RecordDispatch(
                     request.RecipientsToSend()
                         .Select(recipient => new RecipientSendResult(
-                            recipient.NotificationRecipientId, false, clock.GetUtcNow(), null,
+                            recipient.NotificationRecipientId, SendOutcome.PermanentFailure, clock.GetUtcNow(), null,
                             $"Could not render the message: {exception.Message}"))
                         .ToList(),
                     clock.GetUtcNow(),
-                    settings.RetryDelay);
+                    policy,
+                    trigger,
+                    triggeredBy);
                 await db.SaveChangesAsync(cancellationToken);
                 return;
             }
@@ -158,7 +200,7 @@ public sealed class NotificationDispatcher(
         // DoD 1: one operation, concurrent sends — the same body to each.
         var results = await Task.WhenAll(targets.Select(recipient => SendAsync(request, recipient, message, cancellationToken)));
 
-        request.RecordDispatch(results, clock.GetUtcNow(), settings.RetryDelay);
+        request.RecordDispatch(results, clock.GetUtcNow(), policy, trigger, triggeredBy);
         await db.SaveChangesAsync(cancellationToken);
 
         Log(request, results, settings);
@@ -185,15 +227,23 @@ public sealed class NotificationDispatcher(
 
         try
         {
-            var providerId = await sender.SendAsync(email, cancellationToken);
+            var providerResponse = await sender.SendAsync(email, cancellationToken);
 
             // Taken when the provider accepted it — the timestamp the gap is measured on.
-            return new RecipientSendResult(recipient.NotificationRecipientId, true, clock.GetUtcNow(), providerId, null);
+            return new RecipientSendResult(
+                recipient.NotificationRecipientId, SendOutcome.Sent, clock.GetUtcNow(), providerResponse, null);
+        }
+        catch (EmailSendException exception)
+        {
+            return new RecipientSendResult(
+                recipient.NotificationRecipientId, exception.Outcome, clock.GetUtcNow(), exception.ProviderResponse, exception.Message);
         }
         catch (Exception exception) when (exception is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
+            // A sender that did not classify its failure: retry within the budget.
             return new RecipientSendResult(
-                recipient.NotificationRecipientId, false, clock.GetUtcNow(), null, $"{exception.GetType().Name}: {exception.Message}");
+                recipient.NotificationRecipientId, SendOutcome.TransientFailure, clock.GetUtcNow(), null,
+                $"{exception.GetType().Name}: {exception.Message}");
         }
     }
 
@@ -203,8 +253,17 @@ public sealed class NotificationDispatcher(
         {
             var recipient = request.Recipients.Single(candidate => candidate.NotificationRecipientId == failure.NotificationRecipientId);
             logger.LogWarning(
-                "NotificationSendFailed {NotificationRequestId} ({OrderReference}) to {RecipientKind}: {Error}. Next attempt {NextAttemptAt}",
-                request.NotificationRequestId, request.OrderReference, recipient.Kind, failure.Error, request.NextAttemptAt);
+                "NotificationSendFailed {NotificationRequestId} ({OrderReference}) to {RecipientKind}: {Outcome} {Error} [{ProviderResponse}]. Next attempt {NextAttemptAt}",
+                request.NotificationRequestId, request.OrderReference, recipient.Kind, failure.Outcome, failure.Error,
+                failure.ProviderResponse, request.NextAttemptAt);
+        }
+
+        if (request.Status == NotificationStatus.PermanentlyFailed)
+        {
+            // The dead-letter point: no more automatic retries; it is on the admin list.
+            logger.LogError(
+                "NotificationPermanentlyFailed {NotificationRequestId} ({OrderReference}): {FailureReason}",
+                request.NotificationRequestId, request.OrderReference, request.FailureReason);
         }
 
         logger.LogInformation(

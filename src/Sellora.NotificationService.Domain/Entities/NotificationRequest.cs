@@ -15,6 +15,7 @@ public sealed class NotificationRequest : ITenantScoped
     public const int MaxReferenceLength = 50;
 
     private readonly List<NotificationRecipient> _recipients = new();
+    private readonly List<NotificationAttempt> _attempts = new();
 
     private NotificationRequest()
     {
@@ -135,18 +136,38 @@ public sealed class NotificationRequest : ITenantScoped
     public IReadOnlyList<NotificationRecipient> RecipientsToSend() =>
         _recipients.Where(recipient => recipient.NeedsSending).ToList();
 
+    /// <summary>US-E5-3: every attempt to every recipient, oldest first.</summary>
+    public IReadOnlyCollection<NotificationAttempt> AttemptHistory => _attempts.AsReadOnly();
+
+    /// <summary>When an admin last pressed Resend, and who.</summary>
+    public DateTimeOffset? LastResendAt { get; private set; }
+
+    public string? LastResendBy { get; private set; }
+
+    /// <summary>The failure an admin should read first: the most recent error of a recipient not yet sent to.</summary>
+    public string? FailureReason =>
+        _recipients
+            .Where(recipient => recipient.DeliveryStatus != RecipientDeliveryStatus.Sent && recipient.LastError is not null)
+            .OrderByDescending(recipient => recipient.LastAttemptAt ?? DateTimeOffset.MinValue)
+            .Select(recipient => recipient.LastError)
+            .FirstOrDefault();
+
     /// <summary>
-    /// Records one dispatch attempt and moves the request to Sent (everyone
-    /// has it), PartiallySent (some have it) or leaves it Pending (nobody),
-    /// scheduling a retry while anyone who can be sent to is still waiting.
+    /// Records one dispatch attempt and sets the request status:
+    ///   everyone has it                    → Sent
+    ///   someone can still be retried       → PartiallySent (some have it) or Failed (nobody yet),
+    ///                                        next attempt after the back-off
+    ///   nobody left who can be retried     → PermanentlyFailed (admin resend only)
     /// </summary>
     public void RecordDispatch(
         IReadOnlyCollection<RecipientSendResult> results,
         DateTimeOffset completedAt,
-        Func<int, TimeSpan> retryDelay)
+        RetryPolicy policy,
+        AttemptTrigger trigger = AttemptTrigger.Automatic,
+        string? triggeredBy = null)
     {
         ArgumentNullException.ThrowIfNull(results);
-        ArgumentNullException.ThrowIfNull(retryDelay);
+        ArgumentNullException.ThrowIfNull(policy);
 
         foreach (var result in results)
         {
@@ -155,32 +176,37 @@ public sealed class NotificationRequest : ITenantScoped
                 ?? throw new InvalidOperationException(
                     $"Recipient {result.NotificationRecipientId} is not on request {NotificationRequestId}.");
 
-            recipient.Apply(result);
+            var attemptNumber = recipient.Apply(result, policy.MaxAttempts);
+
+            if (attemptNumber is { } number)
+            {
+                _attempts.Add(new NotificationAttempt(recipient, number, result, trigger, triggeredBy));
+            }
         }
 
         AttemptCount += 1;
         LastAttemptAt = completedAt;
         ClaimedUntil = null;
 
-        var sent = _recipients.Where(recipient => recipient.DeliveryStatus == RecipientDeliveryStatus.Sent).ToList();
+        var sentCount = _recipients.Count(recipient => recipient.DeliveryStatus == RecipientDeliveryStatus.Sent);
+        var retryable = _recipients.Where(recipient => recipient.NeedsSending).ToList();
 
-        Status = sent.Count == _recipients.Count
-            ? NotificationStatus.Sent
-            : sent.Count > 0
-                ? NotificationStatus.PartiallySent
-                : NotificationStatus.Pending;
-
-        if (Status == NotificationStatus.Sent)
+        if (sentCount == _recipients.Count)
         {
+            Status = NotificationStatus.Sent;
             CompletedAt ??= completedAt;
             NextAttemptAt = null;
         }
+        else if (retryable.Count > 0)
+        {
+            Status = sentCount > 0 ? NotificationStatus.PartiallySent : NotificationStatus.Failed;
+            var failuresSoFar = retryable.Max(recipient => recipient.FailuresSinceReset);
+            NextAttemptAt = completedAt + policy.Delay(Math.Max(1, failuresSoFar));
+        }
         else
         {
-            // Only someone who can actually be sent to justifies a retry.
-            NextAttemptAt = _recipients.Any(recipient => recipient.NeedsSending)
-                ? completedAt + retryDelay(AttemptCount)
-                : null;
+            Status = NotificationStatus.PermanentlyFailed;
+            NextAttemptAt = null;
         }
 
         var addressed = _recipients.Where(recipient => recipient.Email is not null).ToList();
@@ -191,6 +217,49 @@ public sealed class NotificationRequest : ITenantScoped
             var last = addressed.Max(recipient => recipient.SentAt!.Value);
             SendGapMilliseconds = (int)Math.Min(int.MaxValue, Math.Round((last - first).TotalMilliseconds));
         }
+    }
+
+    /// <summary>
+    /// US-E5-3-T4: a company admin asks for another try. Every recipient not
+    /// yet sent to goes back in the queue with a fresh retry budget, at a
+    /// corrected address when one is given. Nothing already sent is touched,
+    /// and the attempt history is kept.
+    /// </summary>
+    /// <param name="correctedEmails">Per recipient kind, a replacement address (already validated by the caller).</param>
+    public void PrepareResend(
+        IReadOnlyDictionary<RecipientKind, string> correctedEmails,
+        string requestedBy,
+        DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(correctedEmails);
+
+        if (Status == NotificationStatus.Sent)
+        {
+            throw new InvalidOperationException("Every recipient already has this notification; there is nothing to resend.");
+        }
+
+        // Check before changing anything, so a refused resend leaves the request as it was.
+        var sendable = _recipients.Any(recipient =>
+            recipient.DeliveryStatus != RecipientDeliveryStatus.Sent &&
+            (correctedEmails.ContainsKey(recipient.Kind) || recipient.Email is not null));
+
+        if (!sendable)
+        {
+            throw new InvalidOperationException(
+                "No recipient has an email address to send to. Give a corrected address to resend.");
+        }
+
+        foreach (var recipient in _recipients)
+        {
+            recipient.ResetForResend(correctedEmails.GetValueOrDefault(recipient.Kind));
+        }
+
+        LastResendAt = now;
+        LastResendBy = requestedBy.Trim();
+        NextAttemptAt = now;
+        Status = _recipients.Any(recipient => recipient.DeliveryStatus == RecipientDeliveryStatus.Sent)
+            ? NotificationStatus.PartiallySent
+            : NotificationStatus.Pending;
     }
 
     public static NotificationRequest CreatePending(

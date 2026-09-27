@@ -23,12 +23,13 @@ public sealed class NotificationDispatchStateTests
         request.Recipients.Single(recipient => recipient.Kind == kind);
 
     private static RecipientSendResult Ok(NotificationRecipient recipient, DateTimeOffset at) =>
-        new(recipient.NotificationRecipientId, true, at, "queued", null);
+        new(recipient.NotificationRecipientId, SendOutcome.Sent, at, "250 queued", null);
 
     private static RecipientSendResult Fail(NotificationRecipient recipient, DateTimeOffset at) =>
-        new(recipient.NotificationRecipientId, false, at, null, "Mailbox unavailable");
+        new(recipient.NotificationRecipientId, SendOutcome.TransientFailure, at, "421 try later", "Mailbox unavailable");
 
-    private static TimeSpan Backoff(int attempt) => TimeSpan.FromMinutes(attempt);
+    /// <summary>1 min after the first failure, 2 after the second, …; 5 attempts.</summary>
+    private static readonly RetryPolicy Backoff = new(5, failures => TimeSpan.FromMinutes(failures));
 
     [Fact]
     public void Both_delivered_is_Sent_with_the_measured_gap()
@@ -85,7 +86,7 @@ public sealed class NotificationDispatchStateTests
     }
 
     [Fact]
-    public void Nobody_delivered_stays_Pending_with_a_backed_off_retry()
+    public void Nobody_delivered_is_Failed_with_a_backed_off_retry()
     {
         var request = Request();
 
@@ -94,13 +95,13 @@ public sealed class NotificationDispatchStateTests
         request.RecordDispatch(
             new[] { Fail(Of(request, RecipientKind.Shop), Now), Fail(Of(request, RecipientKind.Agency), Now) }, Now, Backoff);
 
-        Assert.Equal(NotificationStatus.Pending, request.Status);
+        Assert.Equal(NotificationStatus.Failed, request.Status);
         Assert.Equal(2, request.AttemptCount);
         Assert.Equal(Now.AddMinutes(2), request.NextAttemptAt);
     }
 
     [Fact]
-    public void A_recipient_without_an_address_is_not_retried_forever()
+    public void A_recipient_without_an_address_is_not_retried_and_is_flagged_for_the_admin()
     {
         var request = Request(agencyEmail: null);
         request.MarkUnaddressedRecipients();
@@ -109,9 +110,10 @@ public sealed class NotificationDispatchStateTests
 
         request.RecordDispatch(new[] { Ok(Of(request, RecipientKind.Shop), Now) }, Now, Backoff);
 
-        Assert.Equal(NotificationStatus.PartiallySent, request.Status);
+        Assert.Equal(NotificationStatus.PermanentlyFailed, request.Status); // US-E5-3: visible, not silent
         Assert.Equal(RecipientDeliveryStatus.Unaddressed, Of(request, RecipientKind.Agency).DeliveryStatus);
         Assert.Null(request.NextAttemptAt); // nothing left that can be sent
+        Assert.Equal(NotificationRecipient.NoAddressReason, request.FailureReason);
     }
 
     [Fact]
