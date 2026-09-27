@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: cd-staging-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   deploy-staging:
     name: Deploy to Azure staging
