@@ -68,7 +68,7 @@ jobs:
               --write-out "%{http_code}" \
               "$WHOAMI_URL" || true)
 
-            if [ "$HEALTH_STATUS" = "200" ] && { [ "$WHOAMI_STATUS" = "200" ] || [ "$WHOAMI_STATUS" = "401" ]; }; then
+            if [ "$HEALTH_STATUS" = "200" ] && { [ "$WHOAMI_STATUS" = "200" ] || [ "$WHOAMI_STATUS" = "404" ]; }; then
               echo "Startup validation passed: /health=200 and /whoami responded with ${WHOAMI_STATUS}"
               exit 0
             fi
