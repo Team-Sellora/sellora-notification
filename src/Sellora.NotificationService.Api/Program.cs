@@ -4,8 +4,11 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Sellora.NotificationService.Api.Authorization;
 using Sellora.NotificationService.Api.Tenancy;
+using Sellora.NotificationService.Application.Dispatch;
 using Sellora.NotificationService.Application.Notifications;
 using Sellora.NotificationService.Domain.Tenancy;
+using Sellora.NotificationService.Infrastructure.Dispatch;
+using Sellora.NotificationService.Infrastructure.Email;
 using Sellora.NotificationService.Infrastructure.Kafka;
 using Sellora.NotificationService.Infrastructure.Notifications;
 using Sellora.NotificationService.Infrastructure.Persistence;
@@ -76,9 +79,16 @@ builder.Services.Configure<OrderEventConsumerOptions>(builder.Configuration.GetS
 builder.Services.AddScoped<INotificationIntake, NotificationIntakeService>();
 builder.Services.AddScoped<INotificationRequestReader, NotificationRequestReader>();
 
+// US-E5-2: render once, send the same message to the shop and the agency concurrently.
+builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(SmtpOptions.SectionName));
+builder.Services.Configure<DispatchOptions>(builder.Configuration.GetSection(DispatchOptions.SectionName));
+builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
+builder.Services.AddScoped<INotificationDispatcher, NotificationDispatcher>();
+
 if (!builder.Environment.IsEnvironment("Testing"))
 {
     builder.Services.AddHostedService<OrderEventConsumerService>();
+    builder.Services.AddHostedService<NotificationDispatchService>();
 }
 
 builder.Services.AddProblemDetails();
