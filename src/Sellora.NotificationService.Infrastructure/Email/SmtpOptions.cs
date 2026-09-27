@@ -29,4 +29,11 @@ public sealed class SmtpOptions
     public bool EnableSsl { get; init; }
 
     public int TimeoutSeconds { get; init; } = 30;
+
+    /// <summary>
+    /// US-E5-3-D1: when true, every send fails transiently as if the provider
+    /// were down, so QA can rehearse an outage anywhere (set
+    /// <c>Smtp__SimulateOutage=true</c>, restart, then set it back).
+    /// </summary>
+    public bool SimulateOutage { get; init; }
 }
