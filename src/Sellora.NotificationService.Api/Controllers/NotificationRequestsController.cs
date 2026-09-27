@@ -49,4 +49,25 @@ public sealed class NotificationRequestsController : ControllerBase
             })
             : Ok(request);
     }
+
+    /// <summary>
+    /// US-E5-2-T4: the exact message sent (subject, HTML, text and its
+    /// SHA-256), reproduced from storage for a dispute — not re-rendered.
+    /// </summary>
+    [HttpGet("{notificationRequestId:guid}/rendered")]
+    [ProducesResponseType(typeof(RenderedNotificationResponse), StatusCodes.Status200OK)]
+    [ProducesResponseType(typeof(ProblemDetails), StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> GetRendered(Guid notificationRequestId, CancellationToken cancellationToken)
+    {
+        var rendered = await _reader.GetRenderedAsync(notificationRequestId, cancellationToken);
+
+        return rendered is null
+            ? NotFound(new ProblemDetails
+            {
+                Status = StatusCodes.Status404NotFound,
+                Title = "Rendered message not found",
+                Detail = $"Notification request {notificationRequestId} is not visible to you or has not been rendered yet."
+            })
+            : Ok(rendered);
+    }
 }
