@@ -59,6 +59,140 @@ public sealed class NotificationRequest : ITenantScoped
 
     public IReadOnlyCollection<NotificationRecipient> Recipients => _recipients.AsReadOnly();
 
+    // ── US-E5-2: the rendered message and its dispatch ───────────────────
+
+    /// <summary>The subject exactly as sent (includes the order reference).</summary>
+    public string? RenderedSubject { get; private set; }
+
+    /// <summary>The HTML body exactly as sent — kept for dispute reproduction.</summary>
+    public string? RenderedHtml { get; private set; }
+
+    /// <summary>The plain-text alternative exactly as sent.</summary>
+    public string? RenderedText { get; private set; }
+
+    /// <summary>SHA-256 over subject + HTML + text; also sent as a header, so a forwarded copy can be matched.</summary>
+    public string? RenderedBodySha256 { get; private set; }
+
+    public DateTimeOffset? RenderedAt { get; private set; }
+
+    public int AttemptCount { get; private set; }
+
+    public DateTimeOffset? LastAttemptAt { get; private set; }
+
+    /// <summary>When a retry is due; null when nothing is left that can be sent.</summary>
+    public DateTimeOffset? NextAttemptAt { get; private set; }
+
+    /// <summary>When every recipient had received it.</summary>
+    public DateTimeOffset? CompletedAt { get; private set; }
+
+    /// <summary>
+    /// Gap in milliseconds between the first and the last recipient's send
+    /// timestamps — the measured "simultaneous". Set once all addressed
+    /// recipients have been sent to.
+    /// </summary>
+    public int? SendGapMilliseconds { get; private set; }
+
+    /// <summary>A dispatcher's claim on this row; others skip it until it expires.</summary>
+    public DateTimeOffset? ClaimedUntil { get; private set; }
+
+    public bool IsRendered => RenderedAt is not null;
+
+    /// <summary>
+    /// Stores the one rendered message. Rendering happens once per request:
+    /// a retry sends the stored message, never a re-render, so the two
+    /// recipients cannot end up holding different text.
+    /// </summary>
+    public void AttachRendering(RenderedMessage message, DateTimeOffset renderedAt)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+
+        if (IsRendered)
+        {
+            throw new InvalidOperationException(
+                $"Notification request {NotificationRequestId} is already rendered; it is never rendered twice.");
+        }
+
+        RenderedSubject = message.Subject;
+        RenderedHtml = message.Html;
+        RenderedText = message.Text;
+        RenderedBodySha256 = message.BodySha256;
+        RenderedAt = renderedAt;
+    }
+
+    public RenderedMessage? Rendered =>
+        IsRendered ? new RenderedMessage(RenderedSubject!, RenderedHtml!, RenderedText!, RenderedBodySha256!) : null;
+
+    /// <summary>Recipients with no address are marked so they are reported, not retried forever.</summary>
+    public void MarkUnaddressedRecipients()
+    {
+        foreach (var recipient in _recipients)
+        {
+            recipient.MarkUnaddressed();
+        }
+    }
+
+    /// <summary>Who is still owed the message: never those already sent to.</summary>
+    public IReadOnlyList<NotificationRecipient> RecipientsToSend() =>
+        _recipients.Where(recipient => recipient.NeedsSending).ToList();
+
+    /// <summary>
+    /// Records one dispatch attempt and moves the request to Sent (everyone
+    /// has it), PartiallySent (some have it) or leaves it Pending (nobody),
+    /// scheduling a retry while anyone who can be sent to is still waiting.
+    /// </summary>
+    public void RecordDispatch(
+        IReadOnlyCollection<RecipientSendResult> results,
+        DateTimeOffset completedAt,
+        Func<int, TimeSpan> retryDelay)
+    {
+        ArgumentNullException.ThrowIfNull(results);
+        ArgumentNullException.ThrowIfNull(retryDelay);
+
+        foreach (var result in results)
+        {
+            var recipient = _recipients.SingleOrDefault(
+                candidate => candidate.NotificationRecipientId == result.NotificationRecipientId)
+                ?? throw new InvalidOperationException(
+                    $"Recipient {result.NotificationRecipientId} is not on request {NotificationRequestId}.");
+
+            recipient.Apply(result);
+        }
+
+        AttemptCount += 1;
+        LastAttemptAt = completedAt;
+        ClaimedUntil = null;
+
+        var sent = _recipients.Where(recipient => recipient.DeliveryStatus == RecipientDeliveryStatus.Sent).ToList();
+
+        Status = sent.Count == _recipients.Count
+            ? NotificationStatus.Sent
+            : sent.Count > 0
+                ? NotificationStatus.PartiallySent
+                : NotificationStatus.Pending;
+
+        if (Status == NotificationStatus.Sent)
+        {
+            CompletedAt ??= completedAt;
+            NextAttemptAt = null;
+        }
+        else
+        {
+            // Only someone who can actually be sent to justifies a retry.
+            NextAttemptAt = _recipients.Any(recipient => recipient.NeedsSending)
+                ? completedAt + retryDelay(AttemptCount)
+                : null;
+        }
+
+        var addressed = _recipients.Where(recipient => recipient.Email is not null).ToList();
+
+        if (addressed.Count >= 2 && addressed.All(recipient => recipient.SentAt is not null))
+        {
+            var first = addressed.Min(recipient => recipient.SentAt!.Value);
+            var last = addressed.Max(recipient => recipient.SentAt!.Value);
+            SendGapMilliseconds = (int)Math.Min(int.MaxValue, Math.Round((last - first).TotalMilliseconds));
+        }
+    }
+
     public static NotificationRequest CreatePending(
         Guid companyId,
         Guid sourceEventId,

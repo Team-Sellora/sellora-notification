@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 using Sellora.NotificationService.Domain.Entities;
+using Sellora.NotificationService.Domain.Notifications;
 
 namespace Sellora.NotificationService.Infrastructure.Persistence.Configurations;
 
@@ -12,7 +13,7 @@ public sealed class NotificationRequestConfiguration : IEntityTypeConfiguration<
     public void Configure(EntityTypeBuilder<NotificationRequest> builder)
     {
         builder.ToTable("notification_request", table =>
-            table.HasCheckConstraint("ck_notification_request_status", "status IN ('Pending')"));
+            table.HasCheckConstraint("ck_notification_request_status", "status IN ('Pending', 'Sent', 'PartiallySent')"));
 
         builder.HasKey(request => request.NotificationRequestId).HasName("pk_notification_request");
 
@@ -32,6 +33,25 @@ public sealed class NotificationRequestConfiguration : IEntityTypeConfiguration<
         builder.Property(request => request.SourceTopic).HasColumnName("source_topic").HasMaxLength(249).IsRequired();
         builder.Property(request => request.SourcePartition).HasColumnName("source_partition").IsRequired();
         builder.Property(request => request.SourceOffset).HasColumnName("source_offset").IsRequired();
+
+        // US-E5-2: the message exactly as sent, and how the dispatch went.
+        builder.Property(request => request.RenderedSubject).HasColumnName("rendered_subject").HasMaxLength(500);
+        builder.Property(request => request.RenderedHtml).HasColumnName("rendered_html").HasColumnType("text");
+        builder.Property(request => request.RenderedText).HasColumnName("rendered_text").HasColumnType("text");
+        builder.Property(request => request.RenderedBodySha256).HasColumnName("rendered_body_sha256").HasMaxLength(64);
+        builder.Property(request => request.RenderedAt).HasColumnName("rendered_at").HasColumnType("timestamp with time zone");
+        builder.Property(request => request.AttemptCount).HasColumnName("attempt_count").IsRequired();
+        builder.Property(request => request.LastAttemptAt).HasColumnName("last_attempt_at").HasColumnType("timestamp with time zone");
+        builder.Property(request => request.NextAttemptAt).HasColumnName("next_attempt_at").HasColumnType("timestamp with time zone");
+        builder.Property(request => request.CompletedAt).HasColumnName("completed_at").HasColumnType("timestamp with time zone");
+        builder.Property(request => request.SendGapMilliseconds).HasColumnName("send_gap_ms");
+        builder.Property(request => request.ClaimedUntil).HasColumnName("claimed_until").HasColumnType("timestamp with time zone");
+        builder.Ignore(request => request.IsRendered);
+        builder.Ignore(request => request.Rendered);
+
+        // The dispatcher's work queue: due requests in arrival order.
+        builder.HasIndex(request => new { request.Status, request.NextAttemptAt })
+            .HasDatabaseName("ix_notification_request_dispatch_due");
 
         // Event IDs are GUIDs minted by the producer's outbox: unique across
         // companies, so the index is too — no tenant column needed in it.
@@ -61,7 +81,12 @@ public sealed class NotificationRecipientConfiguration : IEntityTypeConfiguratio
     public void Configure(EntityTypeBuilder<NotificationRecipient> builder)
     {
         builder.ToTable("notification_recipient", table =>
-            table.HasCheckConstraint("ck_notification_recipient_kind", "kind IN ('Shop', 'Agency')"));
+        {
+            table.HasCheckConstraint("ck_notification_recipient_kind", "kind IN ('Shop', 'Agency')");
+            table.HasCheckConstraint(
+                "ck_notification_recipient_delivery_status",
+                "delivery_status IN ('Pending', 'Sent', 'Failed', 'Unaddressed')");
+        });
 
         builder.HasKey(recipient => recipient.NotificationRecipientId).HasName("pk_notification_recipient");
 
@@ -72,6 +97,17 @@ public sealed class NotificationRecipientConfiguration : IEntityTypeConfiguratio
         builder.Property(recipient => recipient.RecipientId).HasColumnName("recipient_id").IsRequired();
         builder.Property(recipient => recipient.Name).HasColumnName("name").HasMaxLength(NotificationRecipient.MaxNameLength);
         builder.Property(recipient => recipient.Email).HasColumnName("email").HasMaxLength(NotificationRecipient.MaxEmailLength);
+
+        // US-E5-2: per-recipient delivery, so a retry never re-sends the one who has it.
+        builder.Property(recipient => recipient.DeliveryStatus).HasColumnName("delivery_status")
+            .HasConversion<string>().HasMaxLength(20).IsRequired().HasDefaultValue(RecipientDeliveryStatus.Pending);
+        builder.Property(recipient => recipient.SentAt).HasColumnName("sent_at").HasColumnType("timestamp with time zone");
+        builder.Property(recipient => recipient.Attempts).HasColumnName("attempts").IsRequired();
+        builder.Property(recipient => recipient.LastAttemptAt).HasColumnName("last_attempt_at").HasColumnType("timestamp with time zone");
+        builder.Property(recipient => recipient.LastError).HasColumnName("last_error").HasMaxLength(NotificationRecipient.MaxErrorLength);
+        builder.Property(recipient => recipient.ProviderMessageId).HasColumnName("provider_message_id")
+            .HasMaxLength(NotificationRecipient.MaxProviderMessageIdLength);
+        builder.Ignore(recipient => recipient.NeedsSending);
 
         builder.HasIndex(recipient => new { recipient.NotificationRequestId, recipient.Kind })
             .IsUnique()

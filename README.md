@@ -2,8 +2,9 @@
 
 Event-driven notification service for Sellora. It consumes the order events
 sellora-order publishes on `sellora.order.v1` and turns each notifiable one
-into exactly one **notification request** (shop + agency). Sending the email
-is US-E5-2; failure handling is US-E5-3.
+into exactly one **notification request** (shop + agency). Each request is
+rendered once and sent to both parties at the same moment (US-E5-2);
+failure handling is US-E5-3.
 
 ## Layout
 | Project | Holds |
@@ -36,9 +37,15 @@ Migrations run on startup.
 | `Kafka__ConsumerGroupId` | `sellora.notification.order.v1` | |
 | `Kafka__AutoOffsetReset` | `Latest` | only for a brand-new group; see docs/US-E5-1.md |
 | `Jwt__*` | as other services | |
+| `Smtp__Host` / `Smtp__Port` / `Smtp__EnableSsl` | `localhost` / `1025` / `false` | Brevo: `smtp-relay.brevo.com` / `587` / `true` |
+| `Smtp__Username` / `Smtp__Password` | empty | Brevo SMTP login / SMTP key |
+| `Smtp__From` / `Smtp__FromName` | `noreply@sellora.local` / `Sellora` | must be a Brevo-verified sender |
+| `Dispatch__Enabled` | `true` | `false` stops sending (requests still queue) |
+| `Dispatch__SimultaneityToleranceMilliseconds` | `2000` | the agreed "simultaneous" |
 
 ## Tests
 `dotnet test` — Docker must be running (PostgreSQL and Kafka run in Testcontainers).
 
 ## Docs
 - `docs/US-E5-1.md` — consumption, idempotency, dead-lettering, recipient rules.
+- `docs/US-E5-2.md` — render once, concurrent dual dispatch, partial sends, Brevo.

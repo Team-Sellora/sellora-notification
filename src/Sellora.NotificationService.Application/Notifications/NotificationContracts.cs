@@ -29,7 +29,36 @@ public interface INotificationIntake
     Task<IntakeResult> AcceptAsync(ConsumedMessage message, CancellationToken cancellationToken);
 }
 
-public sealed record NotificationRecipientResponse(string Kind, Guid RecipientId, string? Name, string? Email);
+public sealed record NotificationRecipientResponse(
+    string Kind,
+    Guid RecipientId,
+    string? Name,
+    string? Email,
+    string DeliveryStatus,
+    DateTimeOffset? SentAt,
+    int Attempts,
+    string? LastError);
+
+/// <summary>US-E5-2: how the dispatch went, measured rather than asserted.</summary>
+public sealed record NotificationDispatchResponse(
+    int AttemptCount,
+    DateTimeOffset? LastAttemptAt,
+    DateTimeOffset? NextAttemptAt,
+    DateTimeOffset? CompletedAt,
+    int? SendGapMilliseconds,
+    int ToleranceMilliseconds,
+    bool? WithinTolerance,
+    string? RenderedBodySha256);
+
+/// <summary>US-E5-2-T4: the exact message sent, for a dispute.</summary>
+public sealed record RenderedNotificationResponse(
+    Guid NotificationRequestId,
+    string OrderReference,
+    string Subject,
+    string Html,
+    string Text,
+    string BodySha256,
+    DateTimeOffset RenderedAt);
 
 public sealed record NotificationRequestResponse(
     Guid NotificationRequestId,
@@ -42,9 +71,10 @@ public sealed record NotificationRequestResponse(
     DateTimeOffset OccurredAt,
     DateTimeOffset ReceivedAt,
     string? CorrelationId,
-    IReadOnlyList<NotificationRecipientResponse> Recipients)
+    IReadOnlyList<NotificationRecipientResponse> Recipients,
+    NotificationDispatchResponse Dispatch)
 {
-    public static NotificationRequestResponse From(NotificationRequest request) => new(
+    public static NotificationRequestResponse From(NotificationRequest request, int toleranceMilliseconds) => new(
         request.NotificationRequestId,
         request.SourceEventId,
         request.EventType,
@@ -58,8 +88,24 @@ public sealed record NotificationRequestResponse(
         request.Recipients
             .OrderBy(recipient => recipient.Kind)
             .Select(recipient => new NotificationRecipientResponse(
-                recipient.Kind.ToString(), recipient.RecipientId, recipient.Name, recipient.Email))
-            .ToList());
+                recipient.Kind.ToString(),
+                recipient.RecipientId,
+                recipient.Name,
+                recipient.Email,
+                recipient.DeliveryStatus.ToString(),
+                recipient.SentAt,
+                recipient.Attempts,
+                recipient.LastError))
+            .ToList(),
+        new NotificationDispatchResponse(
+            request.AttemptCount,
+            request.LastAttemptAt,
+            request.NextAttemptAt,
+            request.CompletedAt,
+            request.SendGapMilliseconds,
+            toleranceMilliseconds,
+            request.SendGapMilliseconds is { } gap ? gap <= toleranceMilliseconds : null,
+            request.RenderedBodySha256));
 }
 
 public sealed record PagedResponse<T>(IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount);
@@ -72,4 +118,7 @@ public interface INotificationRequestReader
     Task<PagedResponse<NotificationRequestResponse>> ListAsync(NotificationRequestQuery query, CancellationToken cancellationToken);
 
     Task<NotificationRequestResponse?> GetAsync(Guid notificationRequestId, CancellationToken cancellationToken);
+
+    /// <summary>The stored rendered message; null when not found or not rendered yet.</summary>
+    Task<RenderedNotificationResponse?> GetRenderedAsync(Guid notificationRequestId, CancellationToken cancellationToken);
 }

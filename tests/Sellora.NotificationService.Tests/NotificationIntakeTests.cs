@@ -1,5 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
+using Sellora.NotificationService.Application.Dispatch;
 using Sellora.NotificationService.Application.Notifications;
 using Sellora.NotificationService.Domain.Notifications;
 using Sellora.NotificationService.Infrastructure.Notifications;
@@ -114,7 +116,7 @@ public sealed class NotificationIntakeTests
         await using var mine = _fixture.CreateContext(_companyId);
         await using var theirs = _fixture.CreateContext(Guid.NewGuid());
 
-        Assert.NotNull(await new NotificationRequestReader(mine).GetAsync(created.NotificationRequestId!.Value, CancellationToken.None));
-        Assert.Null(await new NotificationRequestReader(theirs).GetAsync(created.NotificationRequestId!.Value, CancellationToken.None));
+        Assert.NotNull(await new NotificationRequestReader(mine, Options.Create(new DispatchOptions())).GetAsync(created.NotificationRequestId!.Value, CancellationToken.None));
+        Assert.Null(await new NotificationRequestReader(theirs, Options.Create(new DispatchOptions())).GetAsync(created.NotificationRequestId!.Value, CancellationToken.None));
     }
 }
