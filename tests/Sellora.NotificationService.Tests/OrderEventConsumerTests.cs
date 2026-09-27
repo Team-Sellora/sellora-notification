@@ -1,3 +1,6 @@
+using Sellora.NotificationService.Application.Dispatch;
+using Sellora.NotificationService.Domain.Notifications;
+using Sellora.NotificationService.Infrastructure.Dispatch;
 using System.Text.Json;
 using Confluent.Kafka;
 using Confluent.Kafka.Admin;
@@ -142,6 +145,41 @@ public sealed class OrderEventConsumerTests : IAsyncLifetime
         Assert.Equal(1, await CountAsync(TestEvents.EventId(@event)));
     }
 
+    // US-E5-3 Scenario 2 / Q3 / DoD 3: a full mail outage never stops intake.
+    [Fact]
+    public async Task During_a_full_mail_outage_the_consumer_keeps_storing_every_event()
+    {
+        var events = Enumerable.Range(0, 5)
+            .Select(_ => TestEvents.Order("PaymentRecorded", companyId: _companyId))
+            .ToList();
+
+        foreach (var @event in events)
+        {
+            await ProduceAsync(@event.ToJsonString());
+        }
+
+        await RunConsumerUntilAsync(
+            async () =>
+            {
+                await using var db = _fixture.CreateContext(null);
+                var ids = events.Select(@event => Guid.Parse(TestEvents.EventId(@event))).ToList();
+                var stored = await db.NotificationRequests.IgnoreQueryFilters()
+                    .Where(request => ids.Contains(request.SourceEventId))
+                    .ToListAsync();
+
+                // Every event consumed and stored, and the failed sends are queued for retry, not lost.
+                return stored.Count == events.Count &&
+                       stored.All(request => request.Status == NotificationStatus.Failed && request.NextAttemptAt is not null);
+            },
+            mailDown: true);
+    }
+
+    private sealed class DownEmailSender : IEmailSender
+    {
+        public Task<string?> SendAsync(OutgoingEmail email, CancellationToken cancellationToken) =>
+            throw new EmailSendException(SendOutcome.TransientFailure, "Connection refused (mail provider down).", null);
+    }
+
     private async Task ProduceAsync(string value)
     {
         using var producer = new ProducerBuilder<string, string>(
@@ -157,9 +195,20 @@ public sealed class OrderEventConsumerTests : IAsyncLifetime
         return await db.NotificationRequests.IgnoreQueryFilters().CountAsync(request => request.SourceEventId == id);
     }
 
-    private async Task RunConsumerUntilAsync(Func<Task<bool>> done, CrashOnce? crashes = null)
+    private async Task RunConsumerUntilAsync(Func<Task<bool>> done, CrashOnce? crashes = null, bool mailDown = false)
     {
-        var services = new ServiceCollection()
+        var collection = new ServiceCollection();
+
+        if (mailDown)
+        {
+            // US-E5-3-T3: the dispatcher runs beside the consumer, and every send fails.
+            collection
+                .AddSingleton<IEmailSender, DownEmailSender>()
+                .AddSingleton<IOptions<DispatchOptions>>(Options.Create(new DispatchOptions { PollIntervalSeconds = 1, RetryBaseSeconds = 30 }))
+                .AddScoped<INotificationDispatcher, NotificationDispatcher>();
+        }
+
+        var services = collection
             .AddLogging(logging => logging.SetMinimumLevel(LogLevel.Warning))
             .AddSingleton(TimeProvider.System)
             .AddScoped<ITenantContext>(_ => new TenantStub(null))
@@ -185,6 +234,18 @@ public sealed class OrderEventConsumerTests : IAsyncLifetime
 
         await consumer.StartAsync(CancellationToken.None);
 
+        var dispatch = mailDown
+            ? new NotificationDispatchService(
+                services.GetRequiredService<IServiceScopeFactory>(),
+                services.GetRequiredService<IOptions<DispatchOptions>>(),
+                NullLogger<NotificationDispatchService>.Instance)
+            : null;
+
+        if (dispatch is not null)
+        {
+            await dispatch.StartAsync(CancellationToken.None);
+        }
+
         try
         {
             var deadline = DateTime.UtcNow + Patience;
@@ -198,6 +259,12 @@ public sealed class OrderEventConsumerTests : IAsyncLifetime
         finally
         {
             await consumer.StopAsync(CancellationToken.None);
+
+            if (dispatch is not null)
+            {
+                await dispatch.StopAsync(CancellationToken.None);
+            }
+
             await services.DisposeAsync();
         }
     }

@@ -42,6 +42,9 @@ Migrations run on startup.
 | `Smtp__From` / `Smtp__FromName` | `noreply@sellora.local` / `Sellora` | must be a Brevo-verified sender |
 | `Dispatch__Enabled` | `true` | `false` stops sending (requests still queue) |
 | `Dispatch__SimultaneityToleranceMilliseconds` | `2000` | the agreed "simultaneous" |
+| `Dispatch__RetryBaseSeconds` / `Dispatch__RetryMaxSeconds` | `30` / `1800` | first retry delay; longest single wait |
+| `Dispatch__MaxAttempts` / `Dispatch__JitterRatio` | `5` / `0.2` | attempts before PermanentlyFailed; ±20 % jitter |
+| `Smtp__SimulateOutage` | `false` | `true` makes every send fail transiently (QA outage drills) |
 
 ## Tests
 `dotnet test` — Docker must be running (PostgreSQL and Kafka run in Testcontainers).
@@ -49,3 +52,4 @@ Migrations run on startup.
 ## Docs
 - `docs/US-E5-1.md` — consumption, idempotency, dead-lettering, recipient rules.
 - `docs/US-E5-2.md` — render once, concurrent dual dispatch, partial sends, Brevo.
+- `docs/US-E5-3.md` — retries, transient vs permanent, admin list/resend, dashboard count, outage drills.

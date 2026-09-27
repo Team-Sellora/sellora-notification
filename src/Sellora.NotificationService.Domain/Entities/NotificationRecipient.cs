@@ -5,9 +5,9 @@ namespace Sellora.NotificationService.Domain.Entities;
 
 /// <summary>
 /// One addressee of a notification request — the shop or the agency — with
-/// the name and email the event carried (US-E5-1) and its own delivery state
-/// (US-E5-2), so a recipient that already received the message is never
-/// sent it again when the other one is retried.
+/// the name and email the event carried (US-E5-1), its own delivery state
+/// (US-E5-2) and its own retry budget (US-E5-3), so a recipient that already
+/// received the message is never sent it again when the other is retried.
 /// </summary>
 public sealed class NotificationRecipient : ITenantScoped
 {
@@ -15,6 +15,8 @@ public sealed class NotificationRecipient : ITenantScoped
     public const int MaxEmailLength = 320;
     public const int MaxErrorLength = 1000;
     public const int MaxProviderMessageIdLength = 300;
+
+    public const string NoAddressReason = "No email address is on record for this recipient.";
 
     private NotificationRecipient()
     {
@@ -52,51 +54,112 @@ public sealed class NotificationRecipient : ITenantScoped
     /// <summary>When the provider accepted the message for this recipient.</summary>
     public DateTimeOffset? SentAt { get; private set; }
 
+    /// <summary>Every attempt ever made to this recipient, automatic or manual.</summary>
     public int Attempts { get; private set; }
+
+    /// <summary>
+    /// US-E5-3: attempts counted against the retry budget. Only transient
+    /// failures use it; a manual resend starts a fresh budget.
+    /// </summary>
+    public int FailuresSinceReset { get; private set; }
 
     public DateTimeOffset? LastAttemptAt { get; private set; }
 
     public string? LastError { get; private set; }
 
-    /// <summary>The provider's reply on acceptance (e.g. the SMTP queue ID), for tracing with Brevo.</summary>
+    /// <summary>The provider's last reply for this recipient (acceptance or rejection).</summary>
     public string? ProviderMessageId { get; private set; }
 
-    /// <summary>Still owed the message and has an address to send it to.</summary>
+    /// <summary>Still owed the message, has an address, and is not given up on.</summary>
     public bool NeedsSending =>
         Email is not null &&
         DeliveryStatus is RecipientDeliveryStatus.Pending or RecipientDeliveryStatus.Failed;
+
+    /// <summary>Cannot be reached without someone acting (no address, rejected, out of retries).</summary>
+    public bool IsStuck =>
+        DeliveryStatus is RecipientDeliveryStatus.Unaddressed or RecipientDeliveryStatus.PermanentlyFailed;
 
     internal void MarkUnaddressed()
     {
         if (Email is null && DeliveryStatus == RecipientDeliveryStatus.Pending)
         {
             DeliveryStatus = RecipientDeliveryStatus.Unaddressed;
+            LastError = NoAddressReason;
         }
     }
 
-    internal void Apply(RecipientSendResult result)
+    /// <summary>
+    /// Applies one attempt's result. A transient failure keeps the recipient
+    /// in the retry path until the budget runs out; a permanent failure
+    /// skips the budget and stops at once.
+    /// </summary>
+    /// <returns>The attempt number just made, or null if nothing changed (already sent).</returns>
+    internal int? Apply(RecipientSendResult result, int maxAttempts)
     {
         if (DeliveryStatus == RecipientDeliveryStatus.Sent)
         {
             // Never overwrite a delivery that already happened.
-            return;
+            return null;
         }
 
         Attempts += 1;
         LastAttemptAt = result.At;
+        ProviderMessageId = Trim(result.ProviderResponse, MaxProviderMessageIdLength) ?? ProviderMessageId;
 
-        if (result.Succeeded)
+        switch (result.Outcome)
         {
-            DeliveryStatus = RecipientDeliveryStatus.Sent;
-            SentAt = result.At;
-            ProviderMessageId = Trim(result.ProviderMessageId, MaxProviderMessageIdLength);
-            LastError = null;
+            case SendOutcome.Sent:
+                DeliveryStatus = RecipientDeliveryStatus.Sent;
+                SentAt = result.At;
+                LastError = null;
+                FailuresSinceReset = 0;
+                break;
+
+            case SendOutcome.PermanentFailure:
+                // Retrying a rejected address wastes the budget and delays others.
+                DeliveryStatus = RecipientDeliveryStatus.PermanentlyFailed;
+                LastError = Trim(result.Error ?? "Permanently rejected by the mail provider.", MaxErrorLength);
+                break;
+
+            default:
+                FailuresSinceReset += 1;
+                var error = result.Error ?? "Temporary send failure.";
+
+                if (FailuresSinceReset >= maxAttempts)
+                {
+                    DeliveryStatus = RecipientDeliveryStatus.PermanentlyFailed;
+                    LastError = Trim($"Gave up after {FailuresSinceReset} attempts. Last error: {error}", MaxErrorLength);
+                }
+                else
+                {
+                    DeliveryStatus = RecipientDeliveryStatus.Failed;
+                    LastError = Trim(error, MaxErrorLength);
+                }
+
+                break;
         }
-        else
+
+        return Attempts;
+    }
+
+    /// <summary>
+    /// US-E5-3 manual resend: back in the queue with a fresh retry budget,
+    /// optionally at a corrected address. History is kept, not reset.
+    /// </summary>
+    internal void ResetForResend(string? correctedEmail)
+    {
+        if (DeliveryStatus == RecipientDeliveryStatus.Sent)
         {
-            DeliveryStatus = RecipientDeliveryStatus.Failed;
-            LastError = Trim(result.Error ?? "Unknown send failure.", MaxErrorLength);
+            return;
         }
+
+        if (correctedEmail is not null)
+        {
+            Email = Trim(correctedEmail, MaxEmailLength);
+        }
+
+        DeliveryStatus = RecipientDeliveryStatus.Pending;
+        FailuresSinceReset = 0;
     }
 
     private static string? Trim(string? value, int max)

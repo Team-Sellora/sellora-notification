@@ -3,6 +3,7 @@ using MailKit.Security;
 using Microsoft.Extensions.Options;
 using MimeKit;
 using Sellora.NotificationService.Application.Dispatch;
+using Sellora.NotificationService.Domain.Notifications;
 
 namespace Sellora.NotificationService.Infrastructure.Email;
 
@@ -17,6 +18,42 @@ public sealed class SmtpEmailSender(IOptions<SmtpOptions> options) : IEmailSende
     public async Task<string?> SendAsync(OutgoingEmail email, CancellationToken cancellationToken)
     {
         var settings = options.Value;
+
+        // US-E5-3-D1: a repeatable outage for QA, without stopping containers.
+        if (settings.SimulateOutage)
+        {
+            throw new EmailSendException(
+                SendOutcome.TransientFailure,
+                "Simulated mail outage (Smtp:SimulateOutage = true).",
+                "421 4.3.2 Service not available (simulated)");
+        }
+
+        // US-E5-3-T2: a malformed address is rejected every time — never spend retries on it.
+        if (!EmailAddressRules.IsWellFormed(email.ToAddress))
+        {
+            throw new EmailSendException(
+                SendOutcome.PermanentFailure,
+                $"'{email.ToAddress}' is not a valid email address.",
+                null);
+        }
+
+        try
+        {
+            return await SendOverSmtpAsync(email, settings, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not EmailSendException &&
+                                          !(exception is OperationCanceledException && cancellationToken.IsCancellationRequested))
+        {
+            var (outcome, error, providerResponse) = SmtpFailureClassifier.Classify(exception);
+            throw new EmailSendException(outcome, error, providerResponse, exception);
+        }
+    }
+
+    private static async Task<string?> SendOverSmtpAsync(
+        OutgoingEmail email,
+        SmtpOptions settings,
+        CancellationToken cancellationToken)
+    {
         var message = BuildMessage(email, settings);
 
         using var client = new SmtpClient { Timeout = settings.TimeoutSeconds * 1000 };

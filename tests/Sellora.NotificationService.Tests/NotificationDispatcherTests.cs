@@ -135,7 +135,7 @@ public sealed class NotificationDispatcherTests
     }
 
     [Fact]
-    public async Task A_request_without_an_agency_email_is_sent_to_the_shop_and_not_retried()
+    public async Task A_request_without_an_agency_email_is_sent_to_the_shop_and_flagged_not_retried()
     {
         await using (var db = _fixture.CreateContext(null))
         {
@@ -153,7 +153,7 @@ public sealed class NotificationDispatcherTests
             .Where(r => r.CompanyId == _companyId)
             .SingleAsync(r => r.Recipients.Any(recipient => recipient.Email == null));
 
-        Assert.Equal(NotificationStatus.PartiallySent, stored.Status);
+        Assert.Equal(NotificationStatus.PermanentlyFailed, stored.Status);
         Assert.Equal(RecipientDeliveryStatus.Unaddressed, stored.Recipients.Single(r => r.Kind == RecipientKind.Agency).DeliveryStatus);
         Assert.Null(stored.NextAttemptAt);
         Assert.Equal(1, stored.Recipients.Single(r => r.Kind == RecipientKind.Shop).Attempts); // not picked up again

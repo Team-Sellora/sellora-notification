@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Sellora.NotificationService.Api.Authorization;
+using Sellora.NotificationService.Api.Identity;
+using Sellora.NotificationService.Application.Identity;
 using Sellora.NotificationService.Api.Tenancy;
 using Sellora.NotificationService.Application.Dispatch;
 using Sellora.NotificationService.Application.Notifications;
@@ -84,6 +86,10 @@ builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(SmtpOpt
 builder.Services.Configure<DispatchOptions>(builder.Configuration.GetSection(DispatchOptions.SectionName));
 builder.Services.AddSingleton<IEmailSender, SmtpEmailSender>();
 builder.Services.AddScoped<INotificationDispatcher, NotificationDispatcher>();
+
+// US-E5-3: admin resend (and the caller it records).
+builder.Services.AddScoped<ICallerIdentity, HttpCallerIdentity>();
+builder.Services.AddScoped<INotificationResendService, NotificationResendService>();
 
 if (!builder.Environment.IsEnvironment("Testing"))
 {

@@ -37,7 +37,20 @@ public sealed record NotificationRecipientResponse(
     string DeliveryStatus,
     DateTimeOffset? SentAt,
     int Attempts,
-    string? LastError);
+    string? LastError,
+    DateTimeOffset? LastAttemptAt = null);
+
+/// <summary>US-E5-3: one recorded attempt — the history an admin diagnoses from.</summary>
+public sealed record NotificationAttemptResponse(
+    string RecipientKind,
+    string? EmailAddress,
+    int AttemptNumber,
+    DateTimeOffset AttemptedAt,
+    string Outcome,
+    string? ProviderResponse,
+    string? Error,
+    string Trigger,
+    string? TriggeredBy);
 
 /// <summary>US-E5-2: how the dispatch went, measured rather than asserted.</summary>
 public sealed record NotificationDispatchResponse(
@@ -72,7 +85,11 @@ public sealed record NotificationRequestResponse(
     DateTimeOffset ReceivedAt,
     string? CorrelationId,
     IReadOnlyList<NotificationRecipientResponse> Recipients,
-    NotificationDispatchResponse Dispatch)
+    NotificationDispatchResponse Dispatch,
+    string? FailureReason = null,
+    DateTimeOffset? LastResendAt = null,
+    string? LastResendBy = null,
+    IReadOnlyList<NotificationAttemptResponse>? Attempts = null)
 {
     public static NotificationRequestResponse From(NotificationRequest request, int toleranceMilliseconds) => new(
         request.NotificationRequestId,
@@ -95,7 +112,8 @@ public sealed record NotificationRequestResponse(
                 recipient.DeliveryStatus.ToString(),
                 recipient.SentAt,
                 recipient.Attempts,
-                recipient.LastError))
+                recipient.LastError,
+                recipient.LastAttemptAt))
             .ToList(),
         new NotificationDispatchResponse(
             request.AttemptCount,
@@ -105,12 +123,48 @@ public sealed record NotificationRequestResponse(
             request.SendGapMilliseconds,
             toleranceMilliseconds,
             request.SendGapMilliseconds is { } gap ? gap <= toleranceMilliseconds : null,
-            request.RenderedBodySha256));
+            request.RenderedBodySha256),
+        request.FailureReason,
+        request.LastResendAt,
+        request.LastResendBy,
+        request.AttemptHistory
+            .OrderBy(attempt => attempt.AttemptedAt)
+            .ThenBy(attempt => attempt.RecipientKind)
+            .Select(attempt => new NotificationAttemptResponse(
+                attempt.RecipientKind.ToString(),
+                attempt.EmailAddress,
+                attempt.AttemptNumber,
+                attempt.AttemptedAt,
+                attempt.Outcome.ToString(),
+                attempt.ProviderResponse,
+                attempt.Error,
+                attempt.Trigger.ToString(),
+                attempt.TriggeredBy))
+            .ToList());
 }
 
 public sealed record PagedResponse<T>(IReadOnlyList<T> Items, int Page, int PageSize, int TotalCount);
 
-public sealed record NotificationRequestQuery(Guid? OrderId, string? OrderReference, int Page, int PageSize);
+/// <param name="Status">
+/// A status name (Pending, Sent, PartiallySent, Failed, PermanentlyFailed),
+/// or <c>failed</c> for everything not fully delivered after an attempt
+/// (Failed, PartiallySent and PermanentlyFailed) — the admin's list.
+/// </param>
+public sealed record NotificationRequestQuery(
+    Guid? OrderId,
+    string? OrderReference,
+    int Page,
+    int PageSize,
+    string? Status = null);
+
+/// <summary>US-E5-3-T5: counts a dashboard can poll; a rising NeedsAttention is a silent outage made visible.</summary>
+public sealed record NotificationHealthResponse(
+    int Pending,
+    int Failed,
+    int PartiallySent,
+    int PermanentlyFailed,
+    int NeedsAttention,
+    DateTimeOffset? OldestFailureAt);
 
 /// <summary>Company admin view of what was queued — lets QA check US-E5-1 without database access.</summary>
 public interface INotificationRequestReader
@@ -121,4 +175,33 @@ public interface INotificationRequestReader
 
     /// <summary>The stored rendered message; null when not found or not rendered yet.</summary>
     Task<RenderedNotificationResponse?> GetRenderedAsync(Guid notificationRequestId, CancellationToken cancellationToken);
+
+    Task<NotificationHealthResponse> GetHealthAsync(CancellationToken cancellationToken);
+}
+
+/// <summary>A corrected address for one recipient, given on resend.</summary>
+public sealed record ResendRecipientAddress(string Kind, string Email);
+
+public sealed record ResendNotificationRequest(IReadOnlyCollection<ResendRecipientAddress>? Recipients);
+
+public enum ResendOutcome
+{
+    Succeeded,
+    NotFound,
+    InvalidRequest,
+    NothingToResend,
+    Busy,
+    CallerNotPermitted
+}
+
+/// <summary>The request after the resend attempt (which may itself have failed — see its status).</summary>
+public sealed record ResendResult(ResendOutcome Outcome, NotificationRequestResponse? Request = null, string? Message = null);
+
+/// <summary>US-E5-3-T4: a company admin's manual resend.</summary>
+public interface INotificationResendService
+{
+    Task<ResendResult> ResendAsync(
+        Guid notificationRequestId,
+        ResendNotificationRequest request,
+        CancellationToken cancellationToken);
 }

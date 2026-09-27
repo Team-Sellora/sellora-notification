@@ -13,7 +13,7 @@ public sealed class NotificationRequestConfiguration : IEntityTypeConfiguration<
     public void Configure(EntityTypeBuilder<NotificationRequest> builder)
     {
         builder.ToTable("notification_request", table =>
-            table.HasCheckConstraint("ck_notification_request_status", "status IN ('Pending', 'Sent', 'PartiallySent')"));
+            table.HasCheckConstraint("ck_notification_request_status", "status IN ('Pending', 'Sent', 'PartiallySent', 'Failed', 'PermanentlyFailed')"));
 
         builder.HasKey(request => request.NotificationRequestId).HasName("pk_notification_request");
 
@@ -48,6 +48,21 @@ public sealed class NotificationRequestConfiguration : IEntityTypeConfiguration<
         builder.Property(request => request.ClaimedUntil).HasColumnName("claimed_until").HasColumnType("timestamp with time zone");
         builder.Ignore(request => request.IsRendered);
         builder.Ignore(request => request.Rendered);
+        builder.Ignore(request => request.FailureReason);
+
+        // US-E5-3: the last manual resend.
+        builder.Property(request => request.LastResendAt).HasColumnName("last_resend_at").HasColumnType("timestamp with time zone");
+        builder.Property(request => request.LastResendBy).HasColumnName("last_resend_by").HasMaxLength(200);
+
+        builder.HasMany(request => request.AttemptHistory)
+            .WithOne()
+            .HasForeignKey(attempt => attempt.NotificationRequestId)
+            .OnDelete(DeleteBehavior.Cascade)
+            .HasConstraintName("fk_notification_attempt_request");
+
+        builder.Navigation(request => request.AttemptHistory)
+            .HasField("_attempts")
+            .UsePropertyAccessMode(PropertyAccessMode.Field);
 
         // The dispatcher's work queue: due requests in arrival order.
         builder.HasIndex(request => new { request.Status, request.NextAttemptAt })
@@ -85,7 +100,7 @@ public sealed class NotificationRecipientConfiguration : IEntityTypeConfiguratio
             table.HasCheckConstraint("ck_notification_recipient_kind", "kind IN ('Shop', 'Agency')");
             table.HasCheckConstraint(
                 "ck_notification_recipient_delivery_status",
-                "delivery_status IN ('Pending', 'Sent', 'Failed', 'Unaddressed')");
+                "delivery_status IN ('Pending', 'Sent', 'Failed', 'Unaddressed', 'PermanentlyFailed')");
         });
 
         builder.HasKey(recipient => recipient.NotificationRecipientId).HasName("pk_notification_recipient");
@@ -108,9 +123,45 @@ public sealed class NotificationRecipientConfiguration : IEntityTypeConfiguratio
         builder.Property(recipient => recipient.ProviderMessageId).HasColumnName("provider_message_id")
             .HasMaxLength(NotificationRecipient.MaxProviderMessageIdLength);
         builder.Ignore(recipient => recipient.NeedsSending);
+        builder.Ignore(recipient => recipient.IsStuck);
+
+        // US-E5-3: the retry budget (reset by a manual resend).
+        builder.Property(recipient => recipient.FailuresSinceReset).HasColumnName("failures_since_reset").IsRequired();
 
         builder.HasIndex(recipient => new { recipient.NotificationRequestId, recipient.Kind })
             .IsUnique()
             .HasDatabaseName("uq_notification_recipient_request_kind");
+    }
+}
+
+/// <summary>US-E5-3 DoD 5: append-only history of every send attempt.</summary>
+public sealed class NotificationAttemptConfiguration : IEntityTypeConfiguration<NotificationAttempt>
+{
+    public void Configure(EntityTypeBuilder<NotificationAttempt> builder)
+    {
+        builder.ToTable("notification_attempt", table =>
+        {
+            table.HasCheckConstraint("ck_notification_attempt_outcome", "outcome IN ('Sent', 'TransientFailure', 'PermanentFailure')");
+            table.HasCheckConstraint("ck_notification_attempt_trigger", "attempt_trigger IN ('Automatic', 'ManualResend')");
+        });
+
+        builder.HasKey(attempt => attempt.NotificationAttemptId).HasName("pk_notification_attempt");
+
+        builder.Property(attempt => attempt.NotificationAttemptId).HasColumnName("notification_attempt_id").ValueGeneratedNever();
+        builder.Property(attempt => attempt.NotificationRequestId).HasColumnName("notification_request_id").IsRequired();
+        builder.Property(attempt => attempt.NotificationRecipientId).HasColumnName("notification_recipient_id").IsRequired();
+        builder.Property(attempt => attempt.CompanyId).HasColumnName("company_id").IsRequired();
+        builder.Property(attempt => attempt.RecipientKind).HasColumnName("recipient_kind").HasConversion<string>().HasMaxLength(20).IsRequired();
+        builder.Property(attempt => attempt.EmailAddress).HasColumnName("email_address").HasMaxLength(NotificationRecipient.MaxEmailLength);
+        builder.Property(attempt => attempt.AttemptNumber).HasColumnName("attempt_number").IsRequired();
+        builder.Property(attempt => attempt.AttemptedAt).HasColumnName("attempted_at").HasColumnType("timestamp with time zone").IsRequired();
+        builder.Property(attempt => attempt.Outcome).HasColumnName("outcome").HasConversion<string>().HasMaxLength(30).IsRequired();
+        builder.Property(attempt => attempt.ProviderResponse).HasColumnName("provider_response").HasMaxLength(NotificationAttempt.MaxTextLength);
+        builder.Property(attempt => attempt.Error).HasColumnName("error").HasMaxLength(NotificationAttempt.MaxTextLength);
+        builder.Property(attempt => attempt.Trigger).HasColumnName("attempt_trigger").HasConversion<string>().HasMaxLength(20).IsRequired();
+        builder.Property(attempt => attempt.TriggeredBy).HasColumnName("triggered_by").HasMaxLength(NotificationAttempt.MaxTextLength);
+
+        builder.HasIndex(attempt => new { attempt.NotificationRequestId, attempt.AttemptedAt })
+            .HasDatabaseName("ix_notification_attempt_request_time");
     }
 }

@@ -18,6 +18,9 @@ public sealed class NotificationDbContext : DbContext
 
     public DbSet<NotificationRecipient> NotificationRecipients => Set<NotificationRecipient>();
 
+    /// <summary>US-E5-3: every send attempt.</summary>
+    public DbSet<NotificationAttempt> NotificationAttempts => Set<NotificationAttempt>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(NotificationDbContext).Assembly);
@@ -34,5 +37,10 @@ public sealed class NotificationDbContext : DbContext
             .HasQueryFilter(recipient =>
                 _tenantContext.CompanyId != null &&
                 recipient.CompanyId == _tenantContext.CompanyId);
+
+        modelBuilder.Entity<NotificationAttempt>()
+            .HasQueryFilter(attempt =>
+                _tenantContext.CompanyId != null &&
+                attempt.CompanyId == _tenantContext.CompanyId);
     }
 }
