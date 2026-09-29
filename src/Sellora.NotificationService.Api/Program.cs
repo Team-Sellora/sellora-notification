@@ -91,6 +91,9 @@ builder.Services.AddScoped<INotificationDispatcher, NotificationDispatcher>();
 builder.Services.AddScoped<ICallerIdentity, HttpCallerIdentity>();
 builder.Services.AddScoped<INotificationResendService, NotificationResendService>();
 
+// US-E5-4: the company alert address used for low-stock notifications.
+builder.Services.AddScoped<INotificationSettingsService, NotificationSettingsService>();
+
 if (!builder.Environment.IsEnvironment("Testing"))
 {
     builder.Services.AddHostedService<OrderEventConsumerService>();

@@ -22,7 +22,9 @@ public sealed class NotificationRequestConfiguration : IEntityTypeConfiguration<
         builder.Property(request => request.SourceEventId).HasColumnName("source_event_id").IsRequired();
         builder.Property(request => request.EventType).HasColumnName("event_type").HasMaxLength(50).IsRequired();
         builder.Property(request => request.TemplateKey).HasColumnName("template_key").HasMaxLength(50).IsRequired();
-        builder.Property(request => request.OrderId).HasColumnName("order_id").IsRequired();
+        // US-E5-4: null for low-stock notifications, which are about stock, not an order.
+        builder.Property(request => request.OrderId).HasColumnName("order_id");
+        builder.Property(request => request.Context).HasColumnName("context").HasColumnType("jsonb");
         builder.Property(request => request.OrderReference).HasColumnName("order_reference")
             .HasMaxLength(NotificationRequest.MaxReferenceLength).IsRequired();
         builder.Property(request => request.Status).HasColumnName("status").HasConversion<string>().HasMaxLength(20).IsRequired();
@@ -97,7 +99,7 @@ public sealed class NotificationRecipientConfiguration : IEntityTypeConfiguratio
     {
         builder.ToTable("notification_recipient", table =>
         {
-            table.HasCheckConstraint("ck_notification_recipient_kind", "kind IN ('Shop', 'Agency')");
+            table.HasCheckConstraint("ck_notification_recipient_kind", "kind IN ('Shop', 'Agency', 'CompanyAdmin')");
             table.HasCheckConstraint(
                 "ck_notification_recipient_delivery_status",
                 "delivery_status IN ('Pending', 'Sent', 'Failed', 'Unaddressed', 'PermanentlyFailed')");
@@ -163,5 +165,39 @@ public sealed class NotificationAttemptConfiguration : IEntityTypeConfiguration<
 
         builder.HasIndex(attempt => new { attempt.NotificationRequestId, attempt.AttemptedAt })
             .HasDatabaseName("ix_notification_attempt_request_time");
+    }
+}
+
+/// <summary>US-E5-4: names and addresses learned from order events.</summary>
+public sealed class DirectoryEntryConfiguration : IEntityTypeConfiguration<DirectoryEntry>
+{
+    public void Configure(EntityTypeBuilder<DirectoryEntry> builder)
+    {
+        builder.ToTable("notification_directory", table =>
+            table.HasCheckConstraint("ck_notification_directory_kind", "kind IN ('Agency', 'Shop', 'Product')"));
+
+        builder.HasKey(entry => new { entry.CompanyId, entry.Kind, entry.EntryId }).HasName("pk_notification_directory");
+
+        builder.Property(entry => entry.CompanyId).HasColumnName("company_id");
+        builder.Property(entry => entry.Kind).HasColumnName("kind").HasConversion<string>().HasMaxLength(20);
+        builder.Property(entry => entry.EntryId).HasColumnName("entry_id");
+        builder.Property(entry => entry.Name).HasColumnName("name").HasMaxLength(NotificationRecipient.MaxNameLength);
+        builder.Property(entry => entry.Email).HasColumnName("email").HasMaxLength(NotificationRecipient.MaxEmailLength);
+        builder.Property(entry => entry.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamp with time zone").IsRequired();
+    }
+}
+
+/// <summary>US-E5-4: one row per company.</summary>
+public sealed class NotificationSettingsConfiguration : IEntityTypeConfiguration<NotificationSettings>
+{
+    public void Configure(EntityTypeBuilder<NotificationSettings> builder)
+    {
+        builder.ToTable("notification_settings");
+        builder.HasKey(settings => settings.CompanyId).HasName("pk_notification_settings");
+
+        builder.Property(settings => settings.CompanyId).HasColumnName("company_id").ValueGeneratedNever();
+        builder.Property(settings => settings.AlertEmail).HasColumnName("alert_email").HasMaxLength(NotificationRecipient.MaxEmailLength);
+        builder.Property(settings => settings.UpdatedBy).HasColumnName("updated_by").HasMaxLength(200).IsRequired();
+        builder.Property(settings => settings.UpdatedAt).HasColumnName("updated_at").HasColumnType("timestamp with time zone").IsRequired();
     }
 }

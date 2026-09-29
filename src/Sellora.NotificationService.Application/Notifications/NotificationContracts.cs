@@ -78,7 +78,7 @@ public sealed record NotificationRequestResponse(
     Guid SourceEventId,
     string EventType,
     string TemplateKey,
-    Guid OrderId,
+    Guid? OrderId,
     string OrderReference,
     string Status,
     DateTimeOffset OccurredAt,
@@ -204,4 +204,17 @@ public interface INotificationResendService
         Guid notificationRequestId,
         ResendNotificationRequest request,
         CancellationToken cancellationToken);
+}
+
+/// <summary>US-E5-4: the company's notification settings.</summary>
+public sealed record NotificationSettingsResponse(string? AlertEmail, DateTimeOffset? UpdatedAt, string? UpdatedBy);
+
+public sealed record UpdateNotificationSettingsRequest(string? AlertEmail);
+
+public interface INotificationSettingsService
+{
+    Task<NotificationSettingsResponse> GetAsync(CancellationToken cancellationToken);
+
+    /// <summary>Null/blank clears the alert address. Throws ArgumentException for a malformed one.</summary>
+    Task<NotificationSettingsResponse> UpdateAsync(UpdateNotificationSettingsRequest request, CancellationToken cancellationToken);
 }

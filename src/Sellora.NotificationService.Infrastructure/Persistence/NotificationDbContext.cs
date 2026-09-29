@@ -21,6 +21,12 @@ public sealed class NotificationDbContext : DbContext
     /// <summary>US-E5-3: every send attempt.</summary>
     public DbSet<NotificationAttempt> NotificationAttempts => Set<NotificationAttempt>();
 
+    /// <summary>US-E5-4: names and addresses learned from order events.</summary>
+    public DbSet<DirectoryEntry> DirectoryEntries => Set<DirectoryEntry>();
+
+    /// <summary>US-E5-4: per-company settings (the alert address).</summary>
+    public DbSet<NotificationSettings> NotificationSettings => Set<NotificationSettings>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         modelBuilder.ApplyConfigurationsFromAssembly(typeof(NotificationDbContext).Assembly);
@@ -42,5 +48,15 @@ public sealed class NotificationDbContext : DbContext
             .HasQueryFilter(attempt =>
                 _tenantContext.CompanyId != null &&
                 attempt.CompanyId == _tenantContext.CompanyId);
+
+        modelBuilder.Entity<DirectoryEntry>()
+            .HasQueryFilter(entry =>
+                _tenantContext.CompanyId != null &&
+                entry.CompanyId == _tenantContext.CompanyId);
+
+        modelBuilder.Entity<NotificationSettings>()
+            .HasQueryFilter(settings =>
+                _tenantContext.CompanyId != null &&
+                settings.CompanyId == _tenantContext.CompanyId);
     }
 }
