@@ -33,11 +33,21 @@ public sealed class NotificationRequest : ITenantScoped
     /// <summary>Which message to compose, e.g. <c>payment-recorded.v1</c>.</summary>
     public string TemplateKey { get; private set; } = string.Empty;
 
-    /// <summary>The order the event is about.</summary>
-    public Guid OrderId { get; private set; }
+    /// <summary>The order the event is about; null for events about stock (US-E5-4).</summary>
+    public Guid? OrderId { get; private set; }
 
-    /// <summary>e.g. ORD-260918-K7MQ4R; shown in every message.</summary>
+    /// <summary>
+    /// The reference a person quotes: the order reference (ORD-260918-K7MQ4R)
+    /// or, for low stock, a stock reference (STOCK-260929-1A2B3C).
+    /// </summary>
     public string OrderReference { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// US-E5-4: details looked up when the request was stored (names the raw
+    /// event does not carry, e.g. the product name for low stock), as JSON.
+    /// Kept apart from <see cref="Payload"/>, which stays exactly as consumed.
+    /// </summary>
+    public string? Context { get; private set; }
 
     public NotificationStatus Status { get; private set; }
 
@@ -267,14 +277,15 @@ public sealed class NotificationRequest : ITenantScoped
         Guid sourceEventId,
         string eventType,
         string templateKey,
-        Guid orderId,
+        Guid? orderId,
         string orderReference,
         string payload,
         string? correlationId,
         DateTimeOffset occurredAt,
         DateTimeOffset receivedAt,
         EventSource source,
-        IReadOnlyCollection<NewRecipient> recipients)
+        IReadOnlyCollection<NewRecipient> recipients,
+        string? context = null)
     {
         Require(companyId != Guid.Empty, nameof(companyId));
         Require(sourceEventId != Guid.Empty, nameof(sourceEventId));
@@ -295,6 +306,7 @@ public sealed class NotificationRequest : ITenantScoped
             TemplateKey = templateKey,
             OrderId = orderId,
             OrderReference = orderReference,
+            Context = string.IsNullOrWhiteSpace(context) ? null : context,
             Status = NotificationStatus.Pending,
             Payload = payload,
             CorrelationId = string.IsNullOrWhiteSpace(correlationId) ? null : correlationId,

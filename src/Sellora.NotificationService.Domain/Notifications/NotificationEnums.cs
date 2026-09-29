@@ -26,7 +26,13 @@ public enum RecipientKind
     Shop = 1,
 
     /// <summary>The agency that fulfils the order.</summary>
-    Agency = 2
+    Agency = 2,
+
+    /// <summary>
+    /// US-E5-4: the company's alert address (set by a company admin in
+    /// notification settings) — who hears about low stock.
+    /// </summary>
+    CompanyAdmin = 3
 }
 
 /// <summary>Delivery state of one recipient. Stored as text.</summary>

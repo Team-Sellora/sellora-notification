@@ -1,7 +1,9 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 using Npgsql;
+using Sellora.NotificationService.Application.Events;
 using Sellora.NotificationService.Application.Notifications;
+using Sellora.NotificationService.Domain.Notifications;
 using Sellora.NotificationService.Domain.Entities;
 using Sellora.NotificationService.Infrastructure.Persistence;
 using Sellora.NotificationService.Infrastructure.Persistence.Configurations;
@@ -31,6 +33,9 @@ public sealed class NotificationIntakeService : INotificationIntake
     {
         var plan = NotificationPlanner.Plan(message);
 
+        // US-E5-4: remember names and addresses every order event carries.
+        await ApplyDirectoryUpdatesAsync(plan.DirectoryUpdates, cancellationToken);
+
         if (plan.Kind == PlanKind.Ignore)
         {
             return new IntakeResult(IntakeOutcome.Ignored, plan.Reason);
@@ -50,6 +55,9 @@ public sealed class NotificationIntakeService : INotificationIntake
             return Duplicate(draft, existing.Value, message);
         }
 
+        var recipients = await ResolveRecipientsAsync(draft, cancellationToken);
+        var context = draft.LowStock is null ? null : await LowStockContextAsync(draft.LowStock, cancellationToken);
+
         NotificationRequest request;
 
         try
@@ -66,7 +74,8 @@ public sealed class NotificationIntakeService : INotificationIntake
                 draft.OccurredAt,
                 _clock.GetUtcNow(),
                 new EventSource(message.Topic, message.Partition, message.Offset),
-                draft.Recipients);
+                recipients,
+                context);
         }
         catch (ArgumentException exception)
         {
@@ -102,6 +111,103 @@ public sealed class NotificationIntakeService : INotificationIntake
             request.NotificationRequestId, draft.EventType, draft.EventId, draft.OrderReference, request.Recipients.Count);
 
         return new IntakeResult(IntakeOutcome.Created, "created", request.NotificationRequestId);
+    }
+
+    /// <summary>
+    /// US-E5-4: fills in addresses the event did not carry — an agency or
+    /// shop from the directory learned from order events, the company admin
+    /// from notification settings. Still missing = stored without an address,
+    /// so the dispatcher marks it Unaddressed and the admin list shows it.
+    /// </summary>
+    private async Task<IReadOnlyList<NewRecipient>> ResolveRecipientsAsync(
+        NotificationDraft draft,
+        CancellationToken cancellationToken)
+    {
+        var resolved = new List<NewRecipient>();
+
+        foreach (var recipient in draft.Recipients)
+        {
+            if (recipient.Email is not null)
+            {
+                resolved.Add(recipient);
+                continue;
+            }
+
+            if (recipient.Kind == RecipientKind.CompanyAdmin)
+            {
+                var alertEmail = await _db.NotificationSettings.IgnoreQueryFilters()
+                    .Where(settings => settings.CompanyId == draft.CompanyId)
+                    .Select(settings => settings.AlertEmail)
+                    .SingleOrDefaultAsync(cancellationToken);
+                resolved.Add(recipient with { Email = alertEmail });
+                continue;
+            }
+
+            var kind = recipient.Kind == RecipientKind.Shop ? DirectoryEntryKind.Shop : DirectoryEntryKind.Agency;
+            var entry = await DirectoryAsync(draft.CompanyId, kind, recipient.RecipientId, cancellationToken);
+            resolved.Add(recipient with { Email = entry?.Email, Name = recipient.Name ?? entry?.Name });
+        }
+
+        return resolved;
+    }
+
+    private async Task<string> LowStockContextAsync(LowStockEventMessage lowStock, CancellationToken cancellationToken)
+    {
+        var product = await DirectoryAsync(lowStock.CompanyId, DirectoryEntryKind.Product, lowStock.ProductId, cancellationToken);
+        var isAgencyStock = string.Equals(lowStock.OwnerType, "Agency", StringComparison.OrdinalIgnoreCase) &&
+                            lowStock.ExternalOwnerId is not null;
+        var agency = isAgencyStock
+            ? await DirectoryAsync(lowStock.CompanyId, DirectoryEntryKind.Agency, lowStock.ExternalOwnerId!.Value, cancellationToken)
+            : null;
+        var agencyName = isAgencyStock ? agency?.Name ?? lowStock.OwnerDisplayName ?? "the agency" : null;
+
+        return System.Text.Json.JsonSerializer.Serialize(
+            new Application.Rendering.NotificationRenderer.LowStockContext(
+                product?.Name,
+                agencyName,
+                lowStock.OwnerDisplayName ?? agency?.Name),
+            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+    }
+
+    private Task<DirectoryEntry?> DirectoryAsync(Guid companyId, DirectoryEntryKind kind, Guid entryId, CancellationToken cancellationToken) =>
+        _db.DirectoryEntries.IgnoreQueryFilters()
+            .AsNoTracking()
+            .SingleOrDefaultAsync(
+                entry => entry.CompanyId == companyId && entry.Kind == kind && entry.EntryId == entryId,
+                cancellationToken);
+
+    /// <summary>Latest non-empty value wins; concurrent consumers are safe (ON CONFLICT).</summary>
+    private async Task ApplyDirectoryUpdatesAsync(IReadOnlyList<DirectoryUpdate>? updates, CancellationToken cancellationToken)
+    {
+        if (updates is null || updates.Count == 0)
+        {
+            return;
+        }
+
+        var now = _clock.GetUtcNow();
+
+        foreach (var update in updates)
+        {
+            var name = Trim(update.Name, NotificationRecipient.MaxNameLength);
+            var email = Trim(update.Email, NotificationRecipient.MaxEmailLength);
+
+            await _db.Database.ExecuteSqlInterpolatedAsync(
+                $"""
+                INSERT INTO notification_directory (company_id, kind, entry_id, name, email, updated_at)
+                VALUES ({update.CompanyId}, {update.Kind.ToString()}, {update.EntryId}, {name}, {email}, {now})
+                ON CONFLICT (company_id, kind, entry_id) DO UPDATE
+                SET name = COALESCE(EXCLUDED.name, notification_directory.name),
+                    email = COALESCE(EXCLUDED.email, notification_directory.email),
+                    updated_at = EXCLUDED.updated_at
+                """,
+                cancellationToken);
+        }
+    }
+
+    private static string? Trim(string? value, int max)
+    {
+        var trimmed = value?.Trim();
+        return string.IsNullOrEmpty(trimmed) ? null : trimmed.Length <= max ? trimmed : trimmed[..max];
     }
 
     private IntakeResult Duplicate(NotificationDraft draft, Guid existingId, ConsumedMessage message)
