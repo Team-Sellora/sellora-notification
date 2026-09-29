@@ -35,7 +35,11 @@ public sealed record OrderEventMessage(
     EventShop? Shop,
     EventAgency? Agency,
     EventPayment? Payment,
-    EventLocation? CheckInLocation);
+    EventLocation? CheckInLocation,
+    IReadOnlyList<EventLine>? Lines = null);
+
+/// <summary>US-E5-4: only the product ID and name, to learn product names for low-stock emails.</summary>
+public sealed record EventLine(Guid ProductId, string? ProductName);
 
 public sealed record EventShop(Guid ShopId, string? Name, string? OwnerName, string? OwnerEmail);
 

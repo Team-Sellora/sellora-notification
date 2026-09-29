@@ -180,6 +180,19 @@ public sealed class OrderEventConsumerTests : IAsyncLifetime
             throw new EmailSendException(SendOutcome.TransientFailure, "Connection refused (mail provider down).", null);
     }
 
+    // US-E5-4: the delivery topic will not exist until E6 ships; a missing
+    // subscribed topic must not stop order notifications.
+    [Fact]
+    public async Task A_missing_subscribed_topic_does_not_block_the_order_topic()
+    {
+        var @event = TestEvents.Order("PaymentRecorded", companyId: _companyId);
+        await ProduceAsync(@event.ToJsonString());
+
+        // RunConsumerUntilAsync keeps the default InventoryTopic/DeliveryTopic,
+        // which do not exist on this broker.
+        await RunConsumerUntilAsync(async () => await CountAsync(TestEvents.EventId(@event)) == 1);
+    }
+
     private async Task ProduceAsync(string value)
     {
         using var producer = new ProducerBuilder<string, string>(

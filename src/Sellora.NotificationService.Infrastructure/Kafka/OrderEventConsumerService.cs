@@ -66,11 +66,24 @@ public sealed class OrderEventConsumerService(
 
             try
             {
-                consumer.Subscribe(settings.OrderTopic);
+                // US-E5-4: order, inventory and delivery topics in one group.
+                consumer.Subscribe(settings.Topics());
 
                 while (!stoppingToken.IsCancellationRequested)
                 {
-                    var record = consumer.Consume(stoppingToken);
+                    ConsumeResult<string, string> record;
+
+                    try
+                    {
+                        record = consumer.Consume(stoppingToken);
+                    }
+                    catch (ConsumeException exception) when (IsTopicLevelProblem(exception.Error.Code))
+                    {
+                        // One missing or unauthorised topic (e.g. sellora.delivery.v1
+                        // before E6 exists) must not stop order and stock emails.
+                        WarnTopicProblem(exception);
+                        continue;
+                    }
 
                     if (record is null || record.IsPartitionEOF)
                     {
@@ -123,7 +136,13 @@ public sealed class OrderEventConsumerService(
         CancellationToken cancellationToken)
     {
         var message = new ConsumedMessage(
-            record.Topic, record.Partition.Value, record.Offset.Value, record.Message.Key, record.Message.Value);
+            record.Topic,
+            record.Partition.Value,
+            record.Offset.Value,
+            record.Message.Key,
+            record.Message.Value,
+            // Unknown event types are an error only on the order topic.
+            StrictEventTypes: record.Topic == settings.OrderTopic);
 
         // A fresh scope (and DbContext) per record, so a failed save cannot
         // leave tracked state behind for the replay.
@@ -184,6 +203,25 @@ public sealed class OrderEventConsumerService(
             { "dead-letter-reason", Encoding.UTF8.GetBytes(reason.Length > 500 ? reason[..500] : reason) }
         }
     };
+
+    private DateTimeOffset _lastTopicWarning = DateTimeOffset.MinValue;
+
+    private static bool IsTopicLevelProblem(ErrorCode code) =>
+        code is ErrorCode.UnknownTopicOrPart or ErrorCode.TopicAuthorizationFailed;
+
+    private void WarnTopicProblem(ConsumeException exception)
+    {
+        // Once a minute is enough; librdkafka repeats this on every metadata refresh.
+        if (DateTimeOffset.UtcNow - _lastTopicWarning < TimeSpan.FromMinutes(1))
+        {
+            return;
+        }
+
+        _lastTopicWarning = DateTimeOffset.UtcNow;
+        logger.LogWarning(
+            "Kafka topic problem ({ErrorCode}): {Reason}. Other subscribed topics keep being consumed; create the topic or grant READ on it.",
+            exception.Error.Code, exception.Error.Reason);
+    }
 
     private static void Validate(OrderEventConsumerOptions settings)
     {
