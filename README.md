@@ -33,6 +33,8 @@ Migrations run on startup.
 | `Kafka__BootstrapServers` | `localhost:9092` | Confluent Cloud bootstrap in staging |
 | `Kafka__SaslUsername` / `Kafka__SaslPassword` | empty | Confluent API key/secret; empty = local broker |
 | `Kafka__OrderTopic` | `sellora.order.v1` | the topic sellora-order publishes to |
+| `Kafka__InventoryTopic` | `sellora.inventory.v1` | LowStockDetected (US-E5-4); empty disables |
+| `Kafka__DeliveryTopic` | `sellora.delivery.v1` | delivery events from E6 (US-E5-4); empty disables |
 | `Kafka__DeadLetterTopic` | `sellora.notification.dead-letter.v1` | |
 | `Kafka__ConsumerGroupId` | `sellora.notification.order.v1` | |
 | `Kafka__AutoOffsetReset` | `Latest` | only for a brand-new group; see docs/US-E5-1.md |
@@ -53,3 +55,5 @@ Migrations run on startup.
 - `docs/US-E5-1.md` — consumption, idempotency, dead-lettering, recipient rules.
 - `docs/US-E5-2.md` — render once, concurrent dual dispatch, partial sends, Brevo.
 - `docs/US-E5-3.md` — retries, transient vs permanent, admin list/resend, dashboard count, outage drills.
+- `docs/US-E5-4.md` — delivery and low-stock notifications, directory, company alert address, topic list.
+- `docs/contracts/delivery-events.v1.md` — the delivery event contract E6 must publish.

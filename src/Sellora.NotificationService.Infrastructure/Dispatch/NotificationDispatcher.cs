@@ -165,7 +165,7 @@ public sealed class NotificationDispatcher(
 
             try
             {
-                rendered = NotificationRenderer.Render(request.TemplateKey, request.Payload);
+                rendered = NotificationRenderer.Render(request.TemplateKey, request.Payload, request.Context);
             }
             catch (NotificationRenderException exception)
             {

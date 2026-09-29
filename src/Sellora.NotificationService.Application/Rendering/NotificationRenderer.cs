@@ -28,8 +28,18 @@ public static class NotificationRenderer
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
-    public static RenderedMessage Render(string templateKey, string payload)
+    /// <param name="context">US-E5-4: names looked up at intake (low stock), as JSON; null otherwise.</param>
+    public static RenderedMessage Render(string templateKey, string payload, string? context = null)
     {
+        switch (templateKey)
+        {
+            case "delivery-status.v1":
+            case "delivery-disputed.v1":
+                return RenderDelivery(templateKey, payload);
+            case "low-stock.v1":
+                return RenderLowStock(payload, context);
+        }
+
         OrderEventDetails details;
 
         try
@@ -214,8 +224,9 @@ public static class NotificationRenderer
             .Append(E(content.Intro))
             .Append("</td></tr>")
             .Append("<tr><td style=\"padding:0 24px 16px;font-size:13px;color:#475569;line-height:1.5;\">")
-            .Append("This same message was sent at the same moment to <strong>").Append(E(content.ShopName))
-            .Append("</strong> and <strong>").Append(E(content.AgencyName))
+            .Append(content.AgencyName.Length == 0 ? "This message was sent to <strong>" : "This same message was sent at the same moment to <strong>")
+            .Append(E(content.ShopName))
+            .Append(content.AgencyName.Length == 0 ? "" : "</strong> and <strong>").Append(E(content.AgencyName))
             .Append("</strong>, so both hold an identical record. Quote the order reference if you need to raise a query.")
             .Append("</td></tr>");
 
@@ -283,8 +294,9 @@ public static class NotificationRenderer
         var text = new StringBuilder();
         text.Append("SELLORA — ").Append(content.Headline).Append(" (").Append(content.Reference).Append(")\n\n")
             .Append(content.Intro).Append("\n\n")
-            .Append("This same message was sent at the same moment to ").Append(content.ShopName)
-            .Append(" and ").Append(content.AgencyName).Append(", so both hold an identical record.\n\n");
+            .Append(content.AgencyName.Length == 0 ? "This message was sent to " : "This same message was sent at the same moment to ")
+            .Append(content.ShopName)
+            .Append(content.AgencyName.Length == 0 ? ".\n\n" : $" and {content.AgencyName}, so both hold an identical record.\n\n");
 
         foreach (var (label, value) in content.Facts)
         {
@@ -320,6 +332,158 @@ public static class NotificationRenderer
         text.Append("\nSent automatically by Sellora. Times are Sri Lanka time (UTC+05:30).\n");
         return text.ToString();
     }
+
+    // ── US-E5-4: delivery and low stock (same layout, same render-once pipeline) ──
+
+    private sealed record DeliveryDetails(
+        string? EventType,
+        string? OrderReference,
+        string? PreviousStatus,
+        string? Status,
+        DateTimeOffset OccurredAt,
+        string? Reason,
+        DateTimeOffset? ScheduledFor,
+        DetailsShop? Shop,
+        DetailsAgency? Agency,
+        string? DisputeReason,
+        string? RaisedByRole);
+
+    private static readonly IReadOnlyDictionary<string, (string Headline, string Intro)> DeliveryWording =
+        new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["InTransit"] = ("Delivery on its way", "The delivery for order {0} to {1} has left the agency and is on its way."),
+            ["Delivered"] = ("Delivery completed", "The delivery for order {0} was delivered to {1}."),
+            ["Failed"] = ("Delivery failed", "The delivery for order {0} to {1} could not be completed."),
+            ["Cancelled"] = ("Delivery cancelled", "The delivery for order {0} to {1} was cancelled.")
+        };
+
+    private static RenderedMessage RenderDelivery(string templateKey, string payload)
+    {
+        DeliveryDetails details;
+
+        try
+        {
+            details = JsonSerializer.Deserialize<DeliveryDetails>(payload, Json)
+                ?? throw new NotificationRenderException("The stored event is empty.");
+        }
+        catch (JsonException exception)
+        {
+            throw new NotificationRenderException($"The stored event could not be read: {exception.Message}");
+        }
+
+        if (string.IsNullOrWhiteSpace(details.OrderReference))
+        {
+            throw new NotificationRenderException("The stored delivery event has no order reference.");
+        }
+
+        var reference = details.OrderReference.Trim();
+        var shop = Name(details.Shop?.Name, "the shop");
+        var agency = Name(details.Agency?.Name, "the agency");
+        var facts = new List<(string, string)> { ("Order reference", reference), ("Shop", shop), ("Agency", agency) };
+        string headline, intro, subject;
+
+        if (templateKey == "delivery-disputed.v1")
+        {
+            headline = "Delivery disputed";
+            intro = $"The delivery for order {reference} to {shop} has been disputed.";
+            facts.Add(("Disputed at", When(details.OccurredAt)));
+            if (!string.IsNullOrWhiteSpace(details.RaisedByRole)) facts.Add(("Raised by", details.RaisedByRole.Trim()));
+            if (!string.IsNullOrWhiteSpace(details.DisputeReason)) facts.Add(("Reason", details.DisputeReason.Trim()));
+            subject = $"[{reference}] Delivery disputed — {shop}";
+        }
+        else
+        {
+            var status = (details.Status ?? string.Empty).Trim();
+
+            if (!DeliveryWording.TryGetValue(status, out var wording))
+            {
+                throw new NotificationRenderException($"'{status}' is not a delivery status that is notified.");
+            }
+
+            headline = wording.Headline;
+            intro = string.Format(Invariant, wording.Intro, reference, shop);
+            facts.Add(("Status", status + (string.IsNullOrWhiteSpace(details.PreviousStatus) ? "" : $" (was {details.PreviousStatus.Trim()})")));
+            facts.Add(("Updated at", When(details.OccurredAt)));
+            if (details.ScheduledFor is { } scheduled) facts.Add(("Scheduled for", When(scheduled)));
+            if (!string.IsNullOrWhiteSpace(details.Reason)) facts.Add(("Reason", details.Reason.Trim()));
+            subject = $"[{reference}] {headline} — {shop}";
+        }
+
+        var content = new Content(headline, intro, facts, Array.Empty<DetailsLine>(), "LKR", 0, null, shop, agency, reference);
+        return Finish(Clean(subject), content);
+    }
+
+    private sealed record LowStockDetails(
+        Guid ProductId,
+        int AvailableQuantity,
+        int ReorderThreshold,
+        DateTimeOffset DetectedAt,
+        string? OwnerType,
+        string? OwnerDisplayName);
+
+    /// <summary>What the intake looked up for a low-stock message.</summary>
+    public sealed record LowStockContext(string? ProductName, string? AgencyName, string? OwnerDisplayName);
+
+    private static RenderedMessage RenderLowStock(string payload, string? context)
+    {
+        LowStockDetails details;
+        LowStockContext? names;
+
+        try
+        {
+            details = JsonSerializer.Deserialize<LowStockDetails>(payload, Json)
+                ?? throw new NotificationRenderException("The stored event is empty.");
+            names = string.IsNullOrWhiteSpace(context) ? null : JsonSerializer.Deserialize<LowStockContext>(context, Json);
+        }
+        catch (JsonException exception)
+        {
+            throw new NotificationRenderException($"The stored event could not be read: {exception.Message}");
+        }
+
+        var product = Name(names?.ProductName, $"Product {details.ProductId}");
+        var holder = Name(names?.OwnerDisplayName ?? details.OwnerDisplayName, "the stock holder");
+        var holderKind = details.OwnerType switch
+        {
+            "Agency" => "Agency",
+            "SalesRep" => "Sales rep's van",
+            "Company" => "Company warehouse",
+            _ => "Held by"
+        };
+
+        var facts = new List<(string, string)>
+        {
+            ("Product", product),
+            (holderKind, holder),
+            ("Available now", details.AvailableQuantity.ToString(Invariant)),
+            ("Reorder threshold", details.ReorderThreshold.ToString(Invariant)),
+            ("Detected at", When(details.DetectedAt))
+        };
+
+        var agencyName = names?.AgencyName;
+        var reference = $"STOCK-{details.DetectedAt.UtcDateTime:yyMMdd}";
+        var content = new Content(
+            "Low stock",
+            $"{product} is running low: {details.AvailableQuantity} available at {holder}, below the reorder threshold of {details.ReorderThreshold}.",
+            facts,
+            Array.Empty<DetailsLine>(),
+            "LKR",
+            0,
+            null,
+            string.IsNullOrWhiteSpace(agencyName) ? "the company admin" : agencyName.Trim(),
+            string.IsNullOrWhiteSpace(agencyName) ? "" : "the company admin",
+            reference);
+
+        return Finish(Clean($"[Low stock] {product} — {details.AvailableQuantity} left at {holder}"), content);
+    }
+
+    private static RenderedMessage Finish(string subject, Content content)
+    {
+        var html = Html(content);
+        var text = Text(content);
+        return new RenderedMessage(subject, html, text, Sha256(subject, html, text));
+    }
+
+    private static string Clean(string subject) => subject.Replace('\r', ' ').Replace('\n', ' ');
 
     // ── Formatting ──────────────────────────────────────────────────────
 
