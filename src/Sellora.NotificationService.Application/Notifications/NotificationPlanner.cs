@@ -305,7 +305,7 @@ public static class NotificationPlanner
     }
 
     /// <summary>Names and addresses every order event carries, remembered for low-stock and delivery emails.</summary>
-    private static IReadOnlyList<DirectoryUpdate> OrderDirectoryUpdates(OrderEventMessage parsed)
+    private static List<DirectoryUpdate> OrderDirectoryUpdates(OrderEventMessage parsed)
     {
         var updates = new List<DirectoryUpdate>();
 
@@ -348,14 +348,21 @@ public static class NotificationPlanner
         if (parsed.Shop is null || parsed.Shop.ShopId == Guid.Empty) missing.Add("shop.shopId");
         if (parsed.Agency is null || parsed.Agency.AgencyId == Guid.Empty) missing.Add("agency.agencyId");
 
-        // The payment message (US-E5-2) is composed from these; without them
-        // it could not say what was paid or where.
         if (eventType == OrderEventTypes.PaymentRecorded)
         {
-            if (parsed.Payment is null || parsed.Payment.PaymentId == Guid.Empty) missing.Add("payment");
-            if (parsed.CheckInLocation is null) missing.Add("checkInLocation");
+            AddMissingPaymentFields(parsed, missing);
         }
 
         return missing;
+    }
+
+    /// <summary>
+    /// The payment message (US-E5-2) is composed from these; without them
+    /// it could not say what was paid or where.
+    /// </summary>
+    private static void AddMissingPaymentFields(OrderEventMessage parsed, List<string> missing)
+    {
+        if (parsed.Payment is null || parsed.Payment.PaymentId == Guid.Empty) missing.Add("payment");
+        if (parsed.CheckInLocation is null) missing.Add("checkInLocation");
     }
 }

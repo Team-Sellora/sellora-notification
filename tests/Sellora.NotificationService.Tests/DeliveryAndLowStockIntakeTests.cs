@@ -20,6 +20,9 @@ namespace Sellora.NotificationService.Tests;
 [Collection(PostgreSqlCollection.Name)]
 public sealed class DeliveryAndLowStockIntakeTests
 {
+    private static readonly string[] LowStockRecipients = { "ops@acme.lk", "orders@colombo-agency.lk" };
+    private static readonly string[] DeliveryRecipients = { "orders@colombo-agency.lk", "owner@lakshmi-stores.lk" };
+
     private readonly PostgreSqlFixture _fixture;
     private readonly Guid _companyId = Guid.NewGuid();
     private readonly RecordingEmailSender _mail = new();
@@ -56,7 +59,7 @@ public sealed class DeliveryAndLowStockIntakeTests
             .SingleAsync(r => r.NotificationRequestId == id);
     }
 
-    private IReadOnlyList<OutgoingEmail> SentFor(Guid id) =>
+    private List<OutgoingEmail> SentFor(Guid id) =>
         _mail.Sent.Where(email => email.Headers[NotificationDispatcher.NotificationIdHeader] == id.ToString()).ToList();
 
     // Q2 end to end: agency + company admin get the same message, no shop.
@@ -75,7 +78,7 @@ public sealed class DeliveryAndLowStockIntakeTests
         var stored = await ReloadAsync(result.NotificationRequestId!.Value);
         Assert.Equal(NotificationStatus.Sent, stored.Status);
         Assert.Equal(
-            new[] { "ops@acme.lk", "orders@colombo-agency.lk" },
+            LowStockRecipients,
             stored.Recipients.Select(r => r.Email).OrderBy(e => e));
         Assert.DoesNotContain(stored.Recipients, r => r.Kind == RecipientKind.Shop);
 
@@ -111,7 +114,7 @@ public sealed class DeliveryAndLowStockIntakeTests
 
         Assert.Equal(IntakeOutcome.Ignored, assigned.Outcome);
         var sent = SentFor(delivered.NotificationRequestId!.Value);
-        Assert.Equal(new[] { "orders@colombo-agency.lk", "owner@lakshmi-stores.lk" }, sent.Select(e => e.ToAddress).OrderBy(a => a));
+        Assert.Equal(DeliveryRecipients, sent.Select(e => e.ToAddress).OrderBy(a => a));
         Assert.StartsWith("[ORD-260929-DLV001] Delivery completed", sent[0].Subject);
     }
 

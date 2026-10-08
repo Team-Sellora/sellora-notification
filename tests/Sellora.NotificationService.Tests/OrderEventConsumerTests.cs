@@ -27,6 +27,8 @@ namespace Sellora.NotificationService.Tests;
 [Collection(PostgreSqlCollection.Name)]
 public sealed class OrderEventConsumerTests : IAsyncLifetime
 {
+    private static readonly string[] AllOrderEventTypes = { "OrderPlaced", "OrderConfirmed", "PaymentRecorded", "OrderCancelled" };
+
     private static readonly TimeSpan Patience = TimeSpan.FromSeconds(60);
 
     private readonly PostgreSqlFixture _fixture;
@@ -76,7 +78,7 @@ public sealed class OrderEventConsumerTests : IAsyncLifetime
     [Fact]
     public async Task One_of_each_event_type_produces_one_request_each()
     {
-        var events = new[] { "OrderPlaced", "OrderConfirmed", "PaymentRecorded", "OrderCancelled" }
+        var events = AllOrderEventTypes
             .Select(type => TestEvents.Order(type, companyId: _companyId))
             .ToList();
 

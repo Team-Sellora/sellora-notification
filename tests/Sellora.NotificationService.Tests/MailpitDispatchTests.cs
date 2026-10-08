@@ -23,8 +23,7 @@ namespace Sellora.NotificationService.Tests;
 public sealed class MailpitDispatchTests : IAsyncLifetime
 {
     private readonly PostgreSqlFixture _fixture;
-    private readonly IContainer _mailpit = new ContainerBuilder()
-        .WithImage("axllent/mailpit:v1.21")
+    private readonly IContainer _mailpit = new ContainerBuilder("axllent/mailpit:v1.21")
         .WithPortBinding(1025, true)
         .WithPortBinding(8025, true)
         .WithWaitStrategy(Wait.ForUnixContainer().UntilHttpRequestIsSucceeded(request => request.ForPort(8025).ForPath("/livez")))

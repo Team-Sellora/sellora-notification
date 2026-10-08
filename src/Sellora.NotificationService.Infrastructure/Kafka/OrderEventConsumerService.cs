@@ -66,35 +66,7 @@ public sealed class OrderEventConsumerService(
 
             try
             {
-                // US-E5-4: order, inventory and delivery topics in one group.
-                consumer.Subscribe(settings.Topics());
-
-                while (!stoppingToken.IsCancellationRequested)
-                {
-                    ConsumeResult<string, string> record;
-
-                    try
-                    {
-                        record = consumer.Consume(stoppingToken);
-                    }
-                    catch (ConsumeException exception) when (IsTopicLevelProblem(exception.Error.Code))
-                    {
-                        // One missing or unauthorised topic (e.g. sellora.delivery.v1
-                        // before E6 exists) must not stop order and stock emails.
-                        WarnTopicProblem(exception);
-                        continue;
-                    }
-
-                    if (record is null || record.IsPartitionEOF)
-                    {
-                        continue;
-                    }
-
-                    await HandleAsync(record, settings, deadLetterProducer, stoppingToken);
-
-                    // Only reached once the record is safely dealt with.
-                    consumer.Commit(record);
-                }
+                await ConsumeAsync(consumer, settings, deadLetterProducer, stoppingToken);
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -108,24 +80,79 @@ public sealed class OrderEventConsumerService(
             }
             finally
             {
-                try
-                {
-                    consumer.Close();
-                }
-                catch (KafkaException exception)
-                {
-                    logger.LogWarning(exception, "Kafka consumer could not close cleanly.");
-                }
+                CloseQuietly(consumer);
             }
 
-            try
-            {
-                await Task.Delay(TimeSpan.FromMilliseconds(settings.RetryDelayMilliseconds), stoppingToken);
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+            if (!await WaitBeforeRejoiningAsync(settings, stoppingToken))
             {
                 break;
             }
+        }
+    }
+
+    /// <summary>Consumes and commits one record at a time until the host stops.</summary>
+    private async Task ConsumeAsync(
+        IConsumer<string, string> consumer,
+        OrderEventConsumerOptions settings,
+        IProducer<string, string> deadLetterProducer,
+        CancellationToken stoppingToken)
+    {
+        // US-E5-4: order, inventory and delivery topics in one group.
+        consumer.Subscribe(settings.Topics());
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            ConsumeResult<string, string> record;
+
+            try
+            {
+                record = consumer.Consume(stoppingToken);
+            }
+            catch (ConsumeException exception) when (IsTopicLevelProblem(exception.Error.Code))
+            {
+                // One missing or unauthorised topic (e.g. sellora.delivery.v1
+                // before E6 exists) must not stop order and stock emails.
+                WarnTopicProblem(exception);
+                continue;
+            }
+
+            if (record is null || record.IsPartitionEOF)
+            {
+                continue;
+            }
+
+            await HandleAsync(record, settings, deadLetterProducer, stoppingToken);
+
+            // Only reached once the record is safely dealt with.
+            consumer.Commit(record);
+        }
+    }
+
+    private void CloseQuietly(IConsumer<string, string> consumer)
+    {
+        try
+        {
+            consumer.Close();
+        }
+        catch (KafkaException exception)
+        {
+            logger.LogWarning(exception, "Kafka consumer could not close cleanly.");
+        }
+    }
+
+    /// <summary>False when the host is stopping, so the loop ends instead of rejoining.</summary>
+    private static async Task<bool> WaitBeforeRejoiningAsync(
+        OrderEventConsumerOptions settings,
+        CancellationToken stoppingToken)
+    {
+        try
+        {
+            await Task.Delay(TimeSpan.FromMilliseconds(settings.RetryDelayMilliseconds), stoppingToken);
+            return true;
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+        {
+            return false;
         }
     }
 

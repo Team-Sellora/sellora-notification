@@ -49,7 +49,7 @@ public sealed class NotificationDispatcherTests
             .SingleAsync(request => request.NotificationRequestId == id);
     }
 
-    private IReadOnlyList<OutgoingEmail> SentFor(NotificationRequest request) =>
+    private List<OutgoingEmail> SentFor(NotificationRequest request) =>
         _mail.Sent.Where(email => email.Headers[NotificationDispatcher.NotificationIdHeader] == request.NotificationRequestId.ToString()).ToList();
 
     // Scenario 1 + DoD 1, 3, 5.

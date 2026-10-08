@@ -209,7 +209,7 @@ public sealed class RetryAndClassificationTests
     };
 
     [Theory]
-    [MemberData(nameof(Failures))]
+    [MemberData(nameof(Failures), DisableDiscoveryEnumeration = true)]
     public void Smtp_failures_are_classified(Exception exception, SendOutcome expected)
     {
         Assert.Equal(expected, SmtpFailureClassifier.Classify(exception).Outcome);
