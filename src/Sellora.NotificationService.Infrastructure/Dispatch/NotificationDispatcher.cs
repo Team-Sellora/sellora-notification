@@ -150,6 +150,7 @@ public sealed class NotificationDispatcher(
             .IgnoreQueryFilters() // background work across tenants; each row carries its own companyId
             .Include(candidate => candidate.Recipients)
             .Include(candidate => candidate.AttemptHistory)
+            .AsSplitQuery()
             .SingleOrDefaultAsync(candidate => candidate.NotificationRequestId == notificationRequestId, cancellationToken);
 
         if (request is null || request.Status == NotificationStatus.Sent)
@@ -170,6 +171,7 @@ public sealed class NotificationDispatcher(
             catch (NotificationRenderException exception)
             {
                 logger.LogError(
+                    exception,
                     "NotificationRenderFailed {NotificationRequestId} ({OrderReference}): {Reason}",
                     request.NotificationRequestId, request.OrderReference, exception.Message);
 
