@@ -28,6 +28,10 @@ public static class NotificationRenderer
 
     private static readonly JsonSerializerOptions Json = new(JsonSerializerDefaults.Web);
 
+    private const string AgencyLabel = "Agency";
+    private const string CloseDiv = "</div>";
+    private const string CloseRow = "</td></tr>";
+
     /// <param name="context">US-E5-4: names looked up at intake (low stock), as JSON; null otherwise.</param>
     public static RenderedMessage Render(string templateKey, string payload, string? context = null)
     {
@@ -119,13 +123,13 @@ public static class NotificationRenderer
         var shop = Name(details.Shop?.Name, "the shop");
         var agency = Name(details.Agency?.Name, "the agency");
         var rep = Name(details.SalesRep?.Name, "the sales rep");
-        var currency = string.IsNullOrWhiteSpace(details.Currency) ? "LKR" : details.Currency!.Trim();
+        var currency = string.IsNullOrWhiteSpace(details.Currency) ? "LKR" : details.Currency.Trim();
 
         var facts = new List<(string, string)>
         {
             ("Order reference", reference),
             ("Shop", shop),
-            ("Agency", agency),
+            (AgencyLabel, agency),
             ("Sales rep", rep),
             ("Order type", details.FulfilmentType == "ScheduledDelivery" ? "Scheduled delivery" : "Cash sale")
         };
@@ -162,7 +166,7 @@ public static class NotificationRenderer
                 facts.Add(("Cancelled at", When(details.CancelledAt ?? details.OccurredAt)));
                 if (!string.IsNullOrWhiteSpace(details.Reason))
                 {
-                    facts.Add(("Reason", details.Reason!.Trim()));
+                    facts.Add(("Reason", details.Reason.Trim()));
                 }
                 break;
         }
@@ -184,7 +188,7 @@ public static class NotificationRenderer
     {
         var reference = details.OrderReference!.Trim();
         var shop = Name(details.Shop?.Name, "shop");
-        var currency = string.IsNullOrWhiteSpace(details.Currency) ? "LKR" : details.Currency!.Trim();
+        var currency = string.IsNullOrWhiteSpace(details.Currency) ? "LKR" : details.Currency.Trim();
 
         var subject = template switch
         {
@@ -215,27 +219,27 @@ public static class NotificationRenderer
         // Header band
         html.Append("<tr><td style=\"background:#0d9488;color:#ffffff;padding:20px 24px;border-radius:12px 12px 0 0;\">")
             .Append("<div style=\"font-size:13px;opacity:.85;\">Sellora</div>")
-            .Append("<div style=\"font-size:22px;font-weight:600;margin-top:4px;\">").Append(E(content.Headline)).Append("</div>")
-            .Append("<div style=\"font-size:14px;margin-top:4px;font-family:Consolas,monospace;\">").Append(E(content.Reference)).Append("</div>")
-            .Append("</td></tr>");
+            .Append("<div style=\"font-size:22px;font-weight:600;margin-top:4px;\">").Append(E(content.Headline)).Append(CloseDiv)
+            .Append("<div style=\"font-size:14px;margin-top:4px;font-family:Consolas,monospace;\">").Append(E(content.Reference)).Append(CloseDiv)
+            .Append(CloseRow);
 
         // Intro + who received it
         html.Append("<tr><td style=\"padding:20px 24px 8px;font-size:15px;line-height:1.5;\">")
             .Append(E(content.Intro))
-            .Append("</td></tr>")
+            .Append(CloseRow)
             .Append("<tr><td style=\"padding:0 24px 16px;font-size:13px;color:#475569;line-height:1.5;\">")
             .Append(content.AgencyName.Length == 0 ? "This message was sent to <strong>" : "This same message was sent at the same moment to <strong>")
             .Append(E(content.ShopName))
             .Append(content.AgencyName.Length == 0 ? "" : "</strong> and <strong>").Append(E(content.AgencyName))
             .Append("</strong>, so both hold an identical record. Quote the order reference if you need to raise a query.")
-            .Append("</td></tr>");
+            .Append(CloseRow);
 
         // Facts
         html.Append("<tr><td style=\"padding:0 24px 16px;\"><table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" style=\"font-size:14px;\">");
         foreach (var (label, value) in content.Facts)
         {
             html.Append("<tr><td style=\"padding:6px 0;color:#64748b;width:40%;border-bottom:1px solid #f1f5f9;\">").Append(E(label))
-                .Append("</td><td style=\"padding:6px 0;font-weight:600;border-bottom:1px solid #f1f5f9;\">").Append(E(value)).Append("</td></tr>");
+                .Append("</td><td style=\"padding:6px 0;font-weight:600;border-bottom:1px solid #f1f5f9;\">").Append(E(value)).Append(CloseRow);
         }
         html.Append("</table></td></tr>");
 
@@ -252,7 +256,7 @@ public static class NotificationRenderer
                     .Append("</td><td style=\"padding:8px;border-top:1px solid #e2e8f0;text-align:right;\">").Append(line.Quantity.ToString(Invariant))
                     .Append("</td><td style=\"padding:8px;border-top:1px solid #e2e8f0;text-align:right;\">").Append(E(Money(content.Currency, line.UnitPrice)))
                     .Append("</td><td style=\"padding:8px;border-top:1px solid #e2e8f0;text-align:right;\">").Append(E(Money(content.Currency, line.LineTotal)))
-                    .Append("</td></tr>");
+                    .Append(CloseRow);
             }
             html.Append("<tr><td colspan=\"3\" style=\"padding:8px;border-top:1px solid #e2e8f0;text-align:right;font-weight:600;\">Total</td>")
                 .Append("<td style=\"padding:8px;border-top:1px solid #e2e8f0;text-align:right;font-weight:700;\">").Append(E(Money(content.Currency, content.Total)))
@@ -268,15 +272,15 @@ public static class NotificationRenderer
                 .Append("<div style=\"font-weight:600;margin-bottom:4px;\">Where the rep was standing</div>")
                 .Append("<div>Coordinates: <span style=\"font-family:Consolas,monospace;\">")
                 .Append(Coordinate(location.Latitude)).Append(", ").Append(Coordinate(location.Longitude)).Append("</span></div>")
-                .Append("<div>Distance from the shop: ").Append(E(Meters(location.DistanceMeters))).Append("</div>");
+                .Append("<div>Distance from the shop: ").Append(E(Meters(location.DistanceMeters))).Append(CloseDiv);
             if (location.AccuracyMeters is { } accuracy)
             {
-                html.Append("<div>GPS accuracy: ±").Append(E(Meters(accuracy))).Append("</div>");
+                html.Append("<div>GPS accuracy: ±").Append(E(Meters(accuracy))).Append(CloseDiv);
             }
-            html.Append("<div>Checked in at: ").Append(E(When(location.CheckedInAt))).Append("</div>")
+            html.Append("<div>Checked in at: ").Append(E(When(location.CheckedInAt))).Append(CloseDiv)
                 .Append("<div style=\"margin-top:10px;\"><a href=\"").Append(E(link))
                 .Append("\" style=\"display:inline-block;background:#0d9488;color:#ffffff;text-decoration:none;padding:8px 14px;border-radius:6px;font-weight:600;\">Open location in Maps</a></div>")
-                .Append("<div style=\"font-size:12px;color:#64748b;margin-top:6px;word-break:break-all;\">").Append(E(link)).Append("</div>")
+                .Append("<div style=\"font-size:12px;color:#64748b;margin-top:6px;word-break:break-all;\">").Append(E(link)).Append(CloseDiv)
                 .Append("</div></td></tr>");
         }
 
@@ -348,7 +352,7 @@ public static class NotificationRenderer
         string? DisputeReason,
         string? RaisedByRole);
 
-    private static readonly IReadOnlyDictionary<string, (string Headline, string Intro)> DeliveryWording =
+    private static readonly Dictionary<string, (string Headline, string Intro)> DeliveryWording =
         new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase)
         {
             ["InTransit"] = ("Delivery on its way", "The delivery for order {0} to {1} has left the agency and is on its way."),
@@ -357,7 +361,8 @@ public static class NotificationRenderer
             ["Cancelled"] = ("Delivery cancelled", "The delivery for order {0} to {1} was cancelled.")
         };
 
-    private static RenderedMessage RenderDelivery(string templateKey, string payload)
+    /// <summary>Reads the stored delivery event; it must carry an order reference.</summary>
+    private static (DeliveryDetails Details, string Reference) ReadDelivery(string payload)
     {
         DeliveryDetails details;
 
@@ -376,10 +381,15 @@ public static class NotificationRenderer
             throw new NotificationRenderException("The stored delivery event has no order reference.");
         }
 
-        var reference = details.OrderReference.Trim();
+        return (details, details.OrderReference.Trim());
+    }
+
+    private static RenderedMessage RenderDelivery(string templateKey, string payload)
+    {
+        var (details, reference) = ReadDelivery(payload);
         var shop = Name(details.Shop?.Name, "the shop");
         var agency = Name(details.Agency?.Name, "the agency");
-        var facts = new List<(string, string)> { ("Order reference", reference), ("Shop", shop), ("Agency", agency) };
+        var facts = new List<(string, string)> { ("Order reference", reference), ("Shop", shop), (AgencyLabel, agency) };
         string headline, intro, subject;
 
         if (templateKey == "delivery-disputed.v1")
@@ -444,7 +454,7 @@ public static class NotificationRenderer
         var holder = Name(names?.OwnerDisplayName ?? details.OwnerDisplayName, "the stock holder");
         var holderKind = details.OwnerType switch
         {
-            "Agency" => "Agency",
+            AgencyLabel => AgencyLabel,
             "SalesRep" => "Sales rep's van",
             "Company" => "Company warehouse",
             _ => "Held by"
