@@ -116,7 +116,9 @@ jobs:
             /k:"${{ inputs.sonar-project-key }}" \
             /o:"${{ inputs.sonar-organization }}" \
             /d:sonar.token="$SONAR_TOKEN" \
-            /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml"
+            /d:sonar.cs.opencover.reportsPaths="**/coverage.opencover.xml" \
+            /d:sonar.exclusions="**/Migrations/**,docs/**" \
+            /d:sonar.coverage.exclusions="**/Migrations/**,**/Program.cs,**/*DbContextFactory.cs"
 
       - name: Build solution
         run: |
@@ -148,7 +150,8 @@ jobs:
             --no-build \
             --collect:"XPlat Code Coverage" \
             --results-directory ./TestResults \
-            --logger "trx;LogFileName=test-results.trx"
+            --logger "trx;LogFileName=test-results.trx" \
+            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=opencover
 
       - name: SonarQube end
         if: always()
@@ -180,7 +183,7 @@ jobs:
           docker run -d --name sellora-notification-ci \
             --network host \
             -e ASPNETCORE_ENVIRONMENT=Container \
-            -e ASPNETCORE_URLS="http://+:8099" \
+            -e ASPNETCORE_URLS="http://localhost:8099" \
             -e ConnectionStrings__Default="Host=localhost;Port=5432;Database=notification_ci;Username=sellora_ci;Password=sellora_ci_password" \
             -e Jwt__Authority="https://auth.invalid" \
             -e Jwt__MetadataAddress="https://auth.invalid/.well-known/openid-configuration" \
