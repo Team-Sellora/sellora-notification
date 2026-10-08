@@ -48,14 +48,11 @@ builder.Services
             RoleClaimType = "roles"
         };
 
-        // Local and staging hosts may not trust the shared WSO2 CA.
+        // Local and staging hosts may not trust the shared WSO2 CA; the
+        // relaxation is limited to the identity provider's own host.
         if (builder.Environment.IsDevelopment() || builder.Environment.IsStaging())
         {
-            options.BackchannelHttpHandler = new HttpClientHandler
-            {
-                ServerCertificateCustomValidationCallback =
-                    HttpClientHandler.DangerousAcceptAnyServerCertificateValidator
-            };
+            options.BackchannelHttpHandler = IdentityProviderBackchannel.CreateHandler(jwt["MetadataAddress"]);
         }
     });
 
@@ -166,7 +163,12 @@ app.MapHealthChecks("/health");
 app.MapGet("/whoami", (HttpContext context) =>
     Results.Ok(context.User.Claims.Select(claim => new { claim.Type, claim.Value })))
     .RequireAuthorization();
-    
-app.Run();
 
-public partial class Program;
+await app.RunAsync();
+
+public partial class Program
+{
+    protected Program()
+    {
+    }
+}
