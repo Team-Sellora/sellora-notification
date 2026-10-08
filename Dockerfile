@@ -20,6 +20,9 @@ WORKDIR /app
 
 COPY --from=build /app/publish .
 
+# The aspnet image ships a non-root "app" user; 8080 needs no root to bind.
+USER $APP_UID
+
 EXPOSE 8080
 
 ENV ASPNETCORE_URLS=http://+:8080
