@@ -66,7 +66,7 @@ public sealed class NotificationResendService(
 
         try
         {
-            stored.PrepareResend(corrected, caller.UserId!, clock.GetUtcNow());
+            stored.PrepareResend(corrected, caller.UserId, clock.GetUtcNow());
         }
         catch (InvalidOperationException exception)
         {

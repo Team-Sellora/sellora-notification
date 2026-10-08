@@ -18,6 +18,9 @@ namespace Sellora.NotificationService.Infrastructure.Notifications;
 /// </summary>
 public sealed class NotificationIntakeService : INotificationIntake
 {
+    private static readonly System.Text.Json.JsonSerializerOptions WebJson =
+        new(System.Text.Json.JsonSerializerDefaults.Web);
+
     private readonly NotificationDbContext _db;
     private readonly TimeProvider _clock;
     private readonly ILogger<NotificationIntakeService> _logger;
@@ -166,7 +169,7 @@ public sealed class NotificationIntakeService : INotificationIntake
                 product?.Name,
                 agencyName,
                 lowStock.OwnerDisplayName ?? agency?.Name),
-            new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web));
+            WebJson);
     }
 
     private Task<DirectoryEntry?> DirectoryAsync(Guid companyId, DirectoryEntryKind kind, Guid entryId, CancellationToken cancellationToken) =>
@@ -207,7 +210,13 @@ public sealed class NotificationIntakeService : INotificationIntake
     private static string? Trim(string? value, int max)
     {
         var trimmed = value?.Trim();
-        return string.IsNullOrEmpty(trimmed) ? null : trimmed.Length <= max ? trimmed : trimmed[..max];
+
+        if (string.IsNullOrEmpty(trimmed))
+        {
+            return null;
+        }
+
+        return trimmed.Length <= max ? trimmed : trimmed[..max];
     }
 
     private IntakeResult Duplicate(NotificationDraft draft, Guid existingId, ConsumedMessage message)

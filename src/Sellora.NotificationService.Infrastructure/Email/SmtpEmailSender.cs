@@ -58,13 +58,7 @@ public sealed class SmtpEmailSender(IOptions<SmtpOptions> options) : IEmailSende
 
         using var client = new SmtpClient { Timeout = settings.TimeoutSeconds * 1000 };
 
-        var security = !settings.EnableSsl
-            ? SecureSocketOptions.None
-            : settings.Port == 465
-                ? SecureSocketOptions.SslOnConnect
-                : SecureSocketOptions.StartTls;
-
-        await client.ConnectAsync(settings.Host, settings.Port, security, cancellationToken);
+        await client.ConnectAsync(settings.Host, settings.Port, SocketSecurity(settings), cancellationToken);
 
         if (!string.IsNullOrWhiteSpace(settings.Username))
         {
@@ -76,6 +70,17 @@ public sealed class SmtpEmailSender(IOptions<SmtpOptions> options) : IEmailSende
         await client.DisconnectAsync(quit: true, cancellationToken);
 
         return string.IsNullOrWhiteSpace(response) ? message.MessageId : response;
+    }
+
+    /// <summary>No TLS when SSL is off; implicit TLS on port 465; STARTTLS otherwise.</summary>
+    private static SecureSocketOptions SocketSecurity(SmtpOptions settings)
+    {
+        if (!settings.EnableSsl)
+        {
+            return SecureSocketOptions.None;
+        }
+
+        return settings.Port == 465 ? SecureSocketOptions.SslOnConnect : SecureSocketOptions.StartTls;
     }
 
     /// <summary>
