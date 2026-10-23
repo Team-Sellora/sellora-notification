@@ -1,0 +1,42 @@
+﻿# Local development stack for sellora-notification.
+# Kafka comes from sellora-infra's stack (localhost:9092), same as for sellora-order and sellora-inventory.
+# Mailhog acts as a catch-all SMTP sink so composed emails are visible in the
+# web UI (http://localhost:8025) without sending real mail.
+services:
+  notification-db:
+    image: postgres:16-alpine
+    container_name: notification-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: notification_db
+      POSTGRES_USER: sellora
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-sellora_dev_pass}
+    ports:
+      - "5437:5432"
+    volumes:
+      - notification-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sellora -d notification_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - sellora-network
+
+  mailhog:
+    image: mailhog/mailhog:v1.0.1
+    container_name: notification-mailhog
+    restart: unless-stopped
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - sellora-network
+
+networks:
+  sellora-network:
+    driver: bridge
+
+volumes:
+  notification-db-data:

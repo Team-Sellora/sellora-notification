@@ -1,0 +1,13 @@
+@host = http://localhost:5090
+@token = paste-a-CompanyAdmin-access-token
+
+### Health (no token)
+GET {{host}}/health
+
+### US-E5-1: requests queued for an order (CompanyAdmin token)
+GET {{host}}/api/notification-requests?orderReference=ORD-260925-XXXXXX
+Authorization: Bearer {{token}}
+
+### One request with its recipients
+GET {{host}}/api/notification-requests/00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{token}}
